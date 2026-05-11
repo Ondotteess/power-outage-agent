@@ -6,9 +6,10 @@ import logging
 
 from app.config import settings
 from app.db.engine import async_session_factory, init_db
-from app.db.repositories import RawStore, SourceStore, TaskStore
+from app.db.repositories import ParsedStore, RawStore, SourceStore, TaskStore
 from app.workers.collector import CollectorHandler
 from app.workers.dispatcher import Dispatcher
+from app.workers.parser import ParseHandler
 from app.workers.queue import TaskQueue, TaskType
 from app.workers.scheduler import Scheduler, SourceConfig
 
@@ -16,10 +17,33 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_SOURCES = [
     {
-        "name": "example placeholder",
-        "url": "https://example.com/outages",
+        "name": "Россети Сибирь — плановые отключения",
+        "url": (
+            "https://www.rosseti-sib.ru/local/templates/rosseti/components"
+            "/is/proxy/shutdown_schedule_table/data.php"
+        ),
+        "source_type": "json",
+        "poll_interval_seconds": 21600,  # 6 h
+        "parser_profile": {
+            "parser": "rosseti_sib",
+            "date_filter_days": 4,
+        },
+    },
+    {
+        "name": "Россети Томск — плановые отключения",
+        "url": "https://rosseti-tomsk.ru/customers/info_disconections/planovie_otklucheniya.php",
         "source_type": "html",
         "poll_interval_seconds": 21600,  # 6 h
+        "parser_profile": {
+            "parser": "rosseti_tomsk",
+            "date_filter_days": 4,
+            "verify_ssl": False,  # site uses Russian state root CA not in certifi bundle
+            # Server-side date filter (date_start/date_end) returns empty pages when applied
+            # via query string — likely the form uses POST or JS-side filtering. Skip it and
+            # rely on parser-side date filtering. Pages are sorted DESC by date, so the
+            # first few pages cover today + 4 days.
+            "paginate": {"param": "PAGEN_1", "max_pages": 2},
+        },
     },
 ]
 
@@ -114,12 +138,19 @@ async def main() -> None:
     queue = TaskQueue()
     task_store = TaskStore(async_session_factory)
     raw_store = RawStore(async_session_factory)
-    logger.debug("Core objects created: TaskQueue, TaskStore, RawStore")
+    source_store = SourceStore(async_session_factory)
+    parsed_store = ParsedStore(async_session_factory)
+    logger.debug("Core objects created: TaskQueue, TaskStore, RawStore, ParsedStore")
 
     dispatcher = Dispatcher(queue, task_store)
-    collector_handler = CollectorHandler(dispatcher.submit, raw_store)
+
+    collector_handler = CollectorHandler(dispatcher.submit, raw_store, source_store)
     dispatcher.register(TaskType.FETCH_SOURCE, collector_handler.handle)
-    logger.debug("Dispatcher created; handler registered for FETCH_SOURCE")
+
+    parse_handler = ParseHandler(dispatcher.submit, raw_store, source_store, parsed_store)
+    dispatcher.register(TaskType.PARSE_CONTENT, parse_handler.handle)
+
+    logger.debug("Dispatcher created; handlers registered for FETCH_SOURCE, PARSE_CONTENT")
 
     scheduler = Scheduler(dispatcher.submit)
     await _bootstrap_sources(scheduler)

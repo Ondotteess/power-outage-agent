@@ -6,8 +6,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.db.models import RawRecord, Source, TaskRecord
-from app.models.schemas import RawRecordSchema
+from app.db.models import ParsedRecord, RawRecord, Source, TaskRecord
+from app.models.schemas import ParsedRecordSchema, RawRecordSchema
 from app.workers.queue import Task
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,12 @@ class RawStore:
         logger.debug("RawStore  exists_by_hash  hash=%s  result=%s", content_hash, exists)
         return exists
 
+    async def get_by_id(self, raw_id: UUID) -> RawRecord | None:
+        logger.debug("RawStore  get_by_id  raw_id=%s", raw_id)
+        async with self._sf() as session:
+            result = await session.execute(select(RawRecord).where(RawRecord.id == raw_id))
+            return result.scalar_one_or_none()
+
     async def save(self, raw: RawRecordSchema, source_id: UUID | None) -> None:
         logger.debug(
             "RawStore  save  raw_id=%s  source_id=%s  hash=%s  size=%d",
@@ -98,6 +104,12 @@ class SourceStore:
         logger.info("SourceStore  list_active  found=%d", len(sources))
         return sources
 
+    async def get_by_id(self, source_id: UUID) -> Source | None:
+        logger.debug("SourceStore  get_by_id  source_id=%s", source_id)
+        async with self._sf() as session:
+            result = await session.execute(select(Source).where(Source.id == source_id))
+            return result.scalar_one_or_none()
+
     async def seed_if_empty(self, defaults: list[dict]) -> None:
         logger.debug("SourceStore  seed_if_empty  defaults=%d", len(defaults))
         async with self._sf() as session:
@@ -110,3 +122,35 @@ class SourceStore:
                 session.add(Source(**payload))
             await session.commit()
         logger.info("SourceStore  seeded %d source(s)", len(defaults))
+
+
+class ParsedStore:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def save_many(self, records: list[ParsedRecordSchema]) -> None:
+        if not records:
+            return
+        logger.debug("ParsedStore  save_many  count=%d", len(records))
+        async with self._sf() as session:
+            for r in records:
+                session.add(
+                    ParsedRecord(
+                        id=r.id,
+                        raw_record_id=r.raw_record_id,
+                        source_id=r.source_id,
+                        external_id=r.external_id,
+                        start_time=r.start_time,
+                        end_time=r.end_time,
+                        location_city=r.location_city,
+                        location_district=r.location_district,
+                        location_street=r.location_street,
+                        location_region_code=r.location_region_code,
+                        reason=r.reason,
+                        extra=r.extra,
+                        trace_id=r.trace_id,
+                        extracted_at=r.extracted_at,
+                    )
+                )
+            await session.commit()
+        logger.info("ParsedStore  saved %d parsed record(s)", len(records))

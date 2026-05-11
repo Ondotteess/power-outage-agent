@@ -96,6 +96,18 @@ psql postgresql://postgres:postgres@localhost:5432/outage_agent
 SELECT * FROM sources;
 SELECT * FROM tasks WHERE status = 'failed';   -- DLQ
 SELECT * FROM raw_records ORDER BY fetched_at DESC LIMIT 10;
+
+-- Распарсенные записи по источникам
+SELECT s.name, COUNT(p.id)
+FROM parsed_records p JOIN sources s ON p.source_id = s.id
+GROUP BY s.name;
+
+-- Примеры извлечённых данных
+SELECT location_region_code, location_district, location_city,
+       location_street, start_time, reason
+FROM parsed_records
+ORDER BY start_time
+LIMIT 20;
 ```
 
 ## Alembic (миграции)

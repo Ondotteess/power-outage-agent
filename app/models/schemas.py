@@ -87,3 +87,26 @@ class NotificationSchema(BaseModel):
     source_summary: str
     channels: list[str] = Field(default_factory=list)
     emitted_at: datetime
+
+
+class ParsedRecordSchema(BaseModel):
+    """Structured record extracted from a raw source, before LLM normalization."""
+
+    id: UUID
+    raw_record_id: UUID
+    source_id: UUID | None = None
+    external_id: str | None = None  # source's own ID, used for dedup
+
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+
+    location_city: str | None = None
+    location_district: str | None = None
+    location_street: str | None = None
+    location_region_code: str | None = None
+
+    reason: str | None = None
+    extra: dict = Field(default_factory=dict)
+
+    trace_id: UUID
+    extracted_at: datetime

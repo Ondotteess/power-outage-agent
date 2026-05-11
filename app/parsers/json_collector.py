@@ -15,14 +15,18 @@ logger = logging.getLogger(__name__)
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (compatible; PowerOutageAgent/0.1; +https://github.com/your-org/power-outage-agent)"
-    )
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.rosseti-sib.ru/otkluchenie-energii/",
 }
 
 
-class HtmlCollector(BaseCollector):
+class JsonCollector(BaseCollector):
+    """Fetches a JSON API endpoint and stores the raw response body."""
+
     async def fetch(self, url: str, trace_id: UUID, verify_ssl: bool = True) -> RawRecordSchema:
         logger.debug(
-            "HtmlCollector  GET  url=%s  verify_ssl=%s  trace=%s", url, verify_ssl, trace_id
+            "JsonCollector  GET  url=%s  verify_ssl=%s  trace=%s", url, verify_ssl, trace_id
         )
 
         async with httpx.AsyncClient(
@@ -31,7 +35,7 @@ class HtmlCollector(BaseCollector):
             response = await client.get(url)
 
         logger.debug(
-            "HtmlCollector  response  status=%d  content_type=%s  size=%d bytes  url=%s  trace=%s",
+            "JsonCollector  response  status=%d  content_type=%s  size=%d bytes  url=%s  trace=%s",
             response.status_code,
             response.headers.get("content-type", "—"),
             len(response.content),
@@ -43,7 +47,7 @@ class HtmlCollector(BaseCollector):
         content = response.text
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         logger.info(
-            "HtmlCollector  fetched  %d chars  hash=%s  url=%s  trace=%s",
+            "JsonCollector  fetched  %d chars  hash=%s  url=%s  trace=%s",
             len(content),
             content_hash,
             url,
@@ -53,7 +57,7 @@ class HtmlCollector(BaseCollector):
         return RawRecordSchema(
             id=uuid4(),
             source_url=url,
-            source_type=SourceType.HTML,
+            source_type=SourceType.JSON,
             raw_content=content,
             content_hash=content_hash,
             fetched_at=datetime.now(UTC),

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.engine import Base
@@ -36,6 +36,35 @@ class RawRecord(Base):
     content_hash: Mapped[str] = mapped_column(String(64), index=True, unique=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     trace_id: Mapped[UUID] = mapped_column(Uuid)
+
+
+class ParsedRecord(Base):
+    __tablename__ = "parsed_records"
+    __table_args__ = (
+        # fast lookup by raw source; also used to skip re-parsing same raw
+        Index("ix_parsed_records_raw_record_id", "raw_record_id"),
+        # dedup within a source by external ID
+        Index("ix_parsed_records_source_external", "source_id", "external_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    raw_record_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("raw_records.id"))
+    source_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("sources.id"), nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    location_city: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    location_district: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    location_street: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    location_region_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extra: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    trace_id: Mapped[UUID] = mapped_column(Uuid)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class TaskRecord(Base):

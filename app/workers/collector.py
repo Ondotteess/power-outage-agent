@@ -2,34 +2,53 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import date, timedelta
 from uuid import UUID
 
-from app.db.repositories import RawStore
+from app.db.repositories import RawStore, SourceStore
 from app.models.schemas import SourceType
 from app.parsers.base import BaseCollector
 from app.parsers.html_collector import HtmlCollector
+from app.parsers.json_collector import JsonCollector
 from app.workers.queue import Task, TaskType
 
 logger = logging.getLogger(__name__)
 
 Submit = Callable[[Task], Awaitable[None]]
 
+_DATE_FMT = "%d.%m.%Y"
+
 
 def default_collectors() -> dict[str, BaseCollector]:
-    return {SourceType.HTML: HtmlCollector()}
+    return {
+        SourceType.HTML: HtmlCollector(),
+        SourceType.JSON: JsonCollector(),
+    }
 
 
 class CollectorHandler:
-    """Handles FETCH_SOURCE tasks: fetches raw content, persists it, enqueues parse."""
+    """Handles FETCH_SOURCE tasks: fetches raw content, persists it, enqueues parse.
+
+    Reads `parser_profile` from the source to support pagination and date-range
+    URL params:
+
+        parser_profile = {
+            "paginate": {"param": "PAGEN_1", "max_pages": 5},
+            "date_params": {"date_start": "today", "date_end": "today+window"},
+            "date_filter_days": 4,
+        }
+    """
 
     def __init__(
         self,
         submit: Submit,
         raw_store: RawStore,
+        source_store: SourceStore | None = None,
         collectors: dict[str, BaseCollector] | None = None,
     ) -> None:
         self._submit = submit
         self._raw_store = raw_store
+        self._source_store = source_store
         self._collectors = collectors if collectors is not None else default_collectors()
 
     async def handle(self, task: Task) -> None:
@@ -38,11 +57,14 @@ class CollectorHandler:
         source_id_str = task.payload.get("source_id")
         source_id = UUID(source_id_str) if source_id_str else None
 
+        parser_profile = await self._load_parser_profile(source_id)
+        urls = self._build_urls(url, parser_profile)
+
         logger.debug(
-            "Collector  start  task_id=%s  source_type=%s  url=%s  source_id=%s  trace=%s",
+            "Collector  start  task_id=%s  source_type=%s  pages=%d  source_id=%s  trace=%s",
             task.task_id,
             source_type,
-            url,
+            len(urls),
             source_id,
             task.trace_id,
         )
@@ -57,7 +79,55 @@ class CollectorHandler:
             )
             raise ValueError(f"No collector for source type: {source_type!r}")
 
-        raw = await collector.fetch(url=url, trace_id=task.trace_id)
+        verify_ssl = bool(parser_profile.get("verify_ssl", True))
+        for page_url in urls:
+            await self._fetch_and_persist(collector, page_url, source_id, task, verify_ssl)
+
+    async def _load_parser_profile(self, source_id: UUID | None) -> dict:
+        if source_id is None or self._source_store is None:
+            return {}
+        source = await self._source_store.get_by_id(source_id)
+        return source.parser_profile if source is not None else {}
+
+    def _build_urls(self, base_url: str, parser_profile: dict) -> list[str]:
+        url_with_dates = self._apply_date_params(base_url, parser_profile)
+
+        paginate = parser_profile.get("paginate")
+        if not paginate:
+            return [url_with_dates]
+
+        param = paginate.get("param", "PAGEN_1")
+        max_pages = int(paginate.get("max_pages", 5))
+        return [_add_param(url_with_dates, param, str(p)) for p in range(1, max_pages + 1)]
+
+    def _apply_date_params(self, url: str, parser_profile: dict) -> str:
+        date_params: dict[str, str] = parser_profile.get("date_params", {})
+        if not date_params:
+            return url
+
+        today = date.today()
+        window = int(parser_profile.get("date_filter_days", 4))
+        cutoff = today + timedelta(days=window)
+        values = {
+            "today": today.strftime(_DATE_FMT),
+            "today+window": cutoff.strftime(_DATE_FMT),
+        }
+
+        result = url
+        for param_name, value_template in date_params.items():
+            value = values.get(value_template, value_template)
+            result = _add_param(result, param_name, value)
+        return result
+
+    async def _fetch_and_persist(
+        self,
+        collector: BaseCollector,
+        url: str,
+        source_id: UUID | None,
+        task: Task,
+        verify_ssl: bool = True,
+    ) -> None:
+        raw = await collector.fetch(url=url, trace_id=task.trace_id, verify_ssl=verify_ssl)
         logger.info(
             "Collector  fetched  %d bytes  url=%s  content_hash=%s  trace=%s",
             len(raw.raw_content),
@@ -96,3 +166,8 @@ class CollectorHandler:
             task.trace_id,
         )
         await self._submit(parse_task)
+
+
+def _add_param(url: str, name: str, value: str) -> str:
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}{name}={value}"

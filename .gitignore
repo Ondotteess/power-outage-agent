@@ -10,3 +10,7 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+.ruff_cache
+.pytest_cache
+.coverage
+samples

@@ -16,7 +16,7 @@ class FakeHtmlCollector(BaseCollector):
         self._body = body
         self.calls: list[tuple[str, UUID]] = []
 
-    async def fetch(self, url: str, trace_id: UUID) -> RawRecordSchema:
+    async def fetch(self, url: str, trace_id: UUID, verify_ssl: bool = True) -> RawRecordSchema:
         self.calls.append((url, trace_id))
         return RawRecordSchema(
             id=uuid4(),
@@ -95,6 +95,116 @@ async def test_collector_skips_duplicate_content_hash():
 
     assert raw_store.saved == []
     assert submitted == []
+
+
+@dataclass
+class FakeSource:
+    id: UUID = field(default_factory=uuid4)
+    parser_profile: dict = field(default_factory=dict)
+
+
+@dataclass
+class FakeSourceStore:
+    source: FakeSource | None = None
+    requested_ids: list[UUID] = field(default_factory=list)
+
+    async def get_by_id(self, source_id: UUID):
+        self.requested_ids.append(source_id)
+        return self.source
+
+
+async def test_collector_paginates_with_parser_profile():
+    submitted: list[Task] = []
+
+    async def submit(task: Task) -> None:
+        submitted.append(task)
+
+    source_id = uuid4()
+    source = FakeSource(
+        id=source_id,
+        parser_profile={"paginate": {"param": "PAGEN_1", "max_pages": 3}},
+    )
+    collector = FakeHtmlCollector(body="<html>page</html>")
+    # Make every fetch produce a different content_hash so all pages get saved
+    fetched_urls: list[str] = []
+    original_fetch = collector.fetch
+
+    async def varying_fetch(url: str, trace_id: UUID, verify_ssl: bool = True):
+        fetched_urls.append(url)
+        raw = await original_fetch(url, trace_id, verify_ssl=verify_ssl)
+        # rewrite hash to be url-dependent
+        import hashlib
+        raw.content_hash = hashlib.sha256(url.encode()).hexdigest()
+        return raw
+
+    collector.fetch = varying_fetch  # type: ignore[assignment]
+
+    handler = CollectorHandler(
+        submit,
+        FakeRawStore(),
+        source_store=FakeSourceStore(source=source),
+        collectors={"html": collector},
+    )
+
+    await handler.handle(
+        Task(
+            task_type=TaskType.FETCH_SOURCE,
+            payload={"url": "https://x/list", "source_id": str(source_id), "source_type": "html"},
+            trace_id=uuid4(),
+        )
+    )
+
+    # 3 pages → 3 PARSE_CONTENT tasks
+    assert len(submitted) == 3
+    assert fetched_urls == [
+        "https://x/list?PAGEN_1=1",
+        "https://x/list?PAGEN_1=2",
+        "https://x/list?PAGEN_1=3",
+    ]
+
+
+async def test_collector_injects_date_params_from_profile():
+    """date_params templates (today, today+window) resolved into URL query params."""
+    from datetime import date, timedelta
+
+    fetched_urls: list[str] = []
+
+    class CapturingCollector(FakeHtmlCollector):
+        async def fetch(self, url: str, trace_id: UUID, verify_ssl: bool = True):
+            fetched_urls.append(url)
+            return await super().fetch(url, trace_id, verify_ssl=verify_ssl)
+
+    source_id = uuid4()
+    source = FakeSource(
+        id=source_id,
+        parser_profile={
+            "date_filter_days": 4,
+            "date_params": {"date_start": "today", "date_end": "today+window"},
+        },
+    )
+
+    handler = CollectorHandler(
+        lambda _t: _noop(),
+        FakeRawStore(),
+        source_store=FakeSourceStore(source=source),
+        collectors={"html": CapturingCollector()},
+    )
+
+    await handler.handle(
+        Task(
+            task_type=TaskType.FETCH_SOURCE,
+            payload={"url": "https://x/list", "source_id": str(source_id), "source_type": "html"},
+            trace_id=uuid4(),
+        )
+    )
+
+    today = date.today().strftime("%d.%m.%Y")
+    cutoff = (date.today() + timedelta(days=4)).strftime("%d.%m.%Y")
+    assert fetched_urls == [f"https://x/list?date_start={today}&date_end={cutoff}"]
+
+
+async def _noop():
+    return None
 
 
 async def test_collector_rejects_unknown_source_type():
