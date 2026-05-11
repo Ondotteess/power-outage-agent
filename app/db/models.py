@@ -57,8 +57,8 @@ class ParsedRecord(Base):
 
     location_city: Mapped[str | None] = mapped_column(String(255), nullable=True)
     location_district: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    location_street: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    location_region_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    location_street: Mapped[str | None] = mapped_column(Text, nullable=True)
+    location_region_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     extra: Mapped[dict] = mapped_column(JSON, default=dict)

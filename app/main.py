@@ -45,6 +45,16 @@ _DEFAULT_SOURCES = [
             "paginate": {"param": "PAGEN_1", "max_pages": 2},
         },
     },
+    {
+        "name": "eseti.ru — плановые отключения",
+        "url": "https://www.eseti.ru/DesktopModules/ResWebApi/API/Shutdown",
+        "source_type": "json",
+        "poll_interval_seconds": 21600,  # 6 h
+        "parser_profile": {
+            "parser": "eseti",
+            "date_filter_days": 4,
+        },
+    },
 ]
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")

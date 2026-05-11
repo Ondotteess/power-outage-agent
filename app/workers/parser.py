@@ -4,6 +4,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
+from app.parsers.eseti import EsetiParser
 from app.parsers.rosseti_sib import RossetiSibParser
 from app.parsers.rosseti_tomsk import RossetiTomskParser
 from app.workers.queue import Task, TaskType
@@ -16,6 +17,7 @@ Submit = Callable[[Task], Awaitable[None]]
 _PARSER_REGISTRY: dict[str, object] = {
     "rosseti_sib": RossetiSibParser(),
     "rosseti_tomsk": RossetiTomskParser(),
+    "eseti": EsetiParser(),
 }
 
 
