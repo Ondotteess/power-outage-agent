@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
@@ -27,12 +29,12 @@ class Task:
     task_id: UUID = field(default_factory=uuid4)
     attempt: int = 0
     max_attempts: int = 5
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def input_hash(self) -> str:
         raw = json.dumps(
-            {"task_type": self.task_type, "payload": self.payload}, sort_keys=True
+            {"task_type": str(self.task_type), "payload": self.payload}, sort_keys=True
         )
         return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -40,29 +42,30 @@ class Task:
 class TaskQueue:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[Task] = asyncio.Queue()
-        self._dlq: list[Task] = []
 
     async def put(self, task: Task) -> None:
-        await self._queue.put(task)
-
-    async def get(self) -> Task:
-        return await self._queue.get()
-
-    def task_done(self) -> None:
-        self._queue.task_done()
-
-    def move_to_dlq(self, task: Task) -> None:
-        logger.error(
-            "Task %s (%s) moved to DLQ after %d attempts",
+        logger.debug(
+            "Queue  PUT  task_id=%s  type=%-20s  attempt=%d  trace=%s",
             task.task_id,
             task.task_type,
             task.attempt,
+            task.trace_id,
         )
-        self._dlq.append(task)
+        await self._queue.put(task)
 
-    @property
-    def dlq(self) -> list[Task]:
-        return list(self._dlq)
+    async def get(self) -> Task:
+        task = await self._queue.get()
+        logger.debug(
+            "Queue  GET  task_id=%s  type=%-20s  attempt=%d  trace=%s",
+            task.task_id,
+            task.task_type,
+            task.attempt,
+            task.trace_id,
+        )
+        return task
+
+    def task_done(self) -> None:
+        self._queue.task_done()
 
     @property
     def size(self) -> int:
