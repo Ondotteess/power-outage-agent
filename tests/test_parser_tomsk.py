@@ -13,7 +13,7 @@ def _today_str(offset: int = 0) -> str:
 def _row_html(
     *,
     locality: str = "Томская обл, Томский р-н, деревня Нелюбино",
-    address: str = 'ул. Весенняя',
+    address: str = "ул. Весенняя",
     date_str: str | None = None,
     time_str: str = "с 10:00 до 16:00",
     reason: str = "Ремонтные работы",

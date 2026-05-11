@@ -6,8 +6,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.db.models import ParsedRecord, RawRecord, Source, TaskRecord
-from app.models.schemas import ParsedRecordSchema, RawRecordSchema
+from app.db.models import NormalizedEvent, ParsedRecord, RawRecord, Source, TaskRecord
+from app.models.schemas import NormalizedEventSchema, ParsedRecordSchema, RawRecordSchema
 from app.workers.queue import Task
 
 logger = logging.getLogger(__name__)
@@ -154,3 +154,42 @@ class ParsedStore:
                 )
             await session.commit()
         logger.info("ParsedStore  saved %d parsed record(s)", len(records))
+
+    async def get_by_id(self, parsed_id: UUID) -> ParsedRecord | None:
+        logger.debug("ParsedStore  get_by_id  parsed_id=%s", parsed_id)
+        async with self._sf() as session:
+            result = await session.execute(select(ParsedRecord).where(ParsedRecord.id == parsed_id))
+            return result.scalar_one_or_none()
+
+
+class NormalizedEventStore:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def save(self, event: NormalizedEventSchema, trace_id: UUID) -> None:
+        logger.debug(
+            "NormalizedEventStore  save  event_id=%s  parsed_record_id=%s",
+            event.event_id,
+            event.parsed_record_id,
+        )
+        async with self._sf() as session:
+            session.add(
+                NormalizedEvent(
+                    event_id=event.event_id,
+                    parsed_record_id=event.parsed_record_id,
+                    event_type=str(event.event_type),
+                    start_time=event.start_time,
+                    end_time=event.end_time,
+                    location_raw=event.location.raw,
+                    location_normalized=event.location.normalized,
+                    location_city=event.location.city,
+                    location_street=event.location.street,
+                    location_building=event.location.building,
+                    reason=event.reason,
+                    sources=[str(source_id) for source_id in event.sources],
+                    confidence=event.confidence,
+                    trace_id=trace_id,
+                )
+            )
+            await session.commit()
+        logger.info("NormalizedEventStore  saved  event_id=%s", event.event_id)

@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 from app.config import settings
 from app.db.engine import async_session_factory, init_db
-from app.db.repositories import ParsedStore, RawStore, SourceStore, TaskStore
+from app.db.repositories import NormalizedEventStore, ParsedStore, RawStore, SourceStore, TaskStore
+from app.normalization.llm import LLMNormalizer
 from app.workers.collector import CollectorHandler
 from app.workers.dispatcher import Dispatcher
+from app.workers.normalizer import NormalizationHandler
 from app.workers.parser import ParseHandler
 from app.workers.queue import TaskQueue, TaskType
 from app.workers.scheduler import Scheduler, SourceConfig
@@ -27,6 +30,7 @@ _DEFAULT_SOURCES = [
         "parser_profile": {
             "parser": "rosseti_sib",
             "date_filter_days": 4,
+            "normalize_enabled": False,
         },
     },
     {
@@ -37,6 +41,7 @@ _DEFAULT_SOURCES = [
         "parser_profile": {
             "parser": "rosseti_tomsk",
             "date_filter_days": 4,
+            "normalize_limit": 3,
             "verify_ssl": False,  # site uses Russian state root CA not in certifi bundle
             # Server-side date filter (date_start/date_end) returns empty pages when applied
             # via query string — likely the form uses POST or JS-side filtering. Skip it and
@@ -53,6 +58,7 @@ _DEFAULT_SOURCES = [
         "parser_profile": {
             "parser": "eseti",
             "date_filter_days": 4,
+            "normalize_enabled": False,
         },
     },
 ]
@@ -87,6 +93,19 @@ def _setup_logging(level: str) -> None:
     logging.getLogger("sqlalchemy.engine").setLevel(
         logging.INFO if level == "DEBUG" else logging.WARNING
     )
+
+
+def _redact_dsn(dsn: str) -> str:
+    try:
+        parts = urlsplit(dsn)
+        if not parts.hostname:
+            return dsn
+        user = parts.username or ""
+        port = f":{parts.port}" if parts.port else ""
+        auth = f"{user}:***@" if user else ""
+        return urlunsplit(parts._replace(netloc=f"{auth}{parts.hostname}{port}"))
+    except ValueError:
+        return "<invalid database_url>"
 
 
 async def _bootstrap_sources(scheduler: Scheduler) -> None:
@@ -125,10 +144,12 @@ async def main() -> None:
 
     logger.info("=== Power Outage Agent starting (log_level=%s) ===", args.log_level)
     logger.debug(
-        "Config: db=%s  llm_base_url=%s  llm_model=%s",
-        settings.database_url,
+        "Config: db=%s  llm_base_url=%s  llm_model=%s  llm_enabled=%s  llm_max_per_raw=%d",
+        _redact_dsn(settings.database_url),
         settings.llm_base_url,
         settings.llm_model,
+        settings.llm_normalization_enabled,
+        settings.llm_normalization_max_per_raw,
     )
 
     logger.info("Initializing database")
@@ -140,7 +161,7 @@ async def main() -> None:
             "  → Is Docker running?  Try: docker compose up db -d\n"
             "  → DATABASE_URL in .env: %s",
             exc,
-            settings.database_url,
+            _redact_dsn(settings.database_url),
         )
         return
     logger.debug("Database schema ready")
@@ -150,17 +171,36 @@ async def main() -> None:
     raw_store = RawStore(async_session_factory)
     source_store = SourceStore(async_session_factory)
     parsed_store = ParsedStore(async_session_factory)
-    logger.debug("Core objects created: TaskQueue, TaskStore, RawStore, ParsedStore")
+    normalized_store = NormalizedEventStore(async_session_factory)
+    logger.debug(
+        "Core objects created: TaskQueue, TaskStore, RawStore, ParsedStore, NormalizedEventStore"
+    )
 
     dispatcher = Dispatcher(queue, task_store)
 
     collector_handler = CollectorHandler(dispatcher.submit, raw_store, source_store)
     dispatcher.register(TaskType.FETCH_SOURCE, collector_handler.handle)
 
-    parse_handler = ParseHandler(dispatcher.submit, raw_store, source_store, parsed_store)
+    parse_handler = ParseHandler(
+        dispatcher.submit,
+        raw_store,
+        source_store,
+        parsed_store,
+        llm_normalization_enabled=settings.llm_normalization_enabled,
+        llm_normalization_max_per_raw=settings.llm_normalization_max_per_raw,
+    )
     dispatcher.register(TaskType.PARSE_CONTENT, parse_handler.handle)
 
-    logger.debug("Dispatcher created; handlers registered for FETCH_SOURCE, PARSE_CONTENT")
+    normalization_handler = NormalizationHandler(
+        parsed_store,
+        normalized_store,
+        LLMNormalizer(),
+    )
+    dispatcher.register(TaskType.NORMALIZE_EVENT, normalization_handler.handle)
+
+    logger.debug(
+        "Dispatcher created; handlers registered for FETCH_SOURCE, PARSE_CONTENT, NORMALIZE_EVENT"
+    )
 
     scheduler = Scheduler(dispatcher.submit)
     await _bootstrap_sources(scheduler)

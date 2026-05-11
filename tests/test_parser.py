@@ -16,6 +16,7 @@ from app.workers.queue import Task, TaskType
 # Fixtures / fakes
 # ---------------------------------------------------------------------------
 
+
 def _today_str(offset: int = 0) -> str:
     d = date.today() + timedelta(days=offset)
     return d.strftime("%d.%m.%Y")
@@ -61,7 +62,9 @@ class FakeRawRecord:
 @dataclass
 class FakeSource:
     id: UUID = field(default_factory=uuid4)
-    parser_profile: dict = field(default_factory=lambda: {"parser": "rosseti_sib", "date_filter_days": 4})
+    parser_profile: dict = field(
+        default_factory=lambda: {"parser": "rosseti_sib", "date_filter_days": 4}
+    )
 
 
 @dataclass
@@ -70,12 +73,6 @@ class FakeRawStore:
 
     async def get_by_id(self, raw_id: UUID) -> FakeRawRecord | None:
         return self.record
-
-    async def exists_by_hash(self, content_hash: str) -> bool:
-        return False
-
-    async def save(self, raw, source_id) -> None:
-        pass
 
 
 @dataclass
@@ -97,6 +94,7 @@ class FakeParsedStore:
 # ---------------------------------------------------------------------------
 # RossetiSibParser unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestRossetiSibParser:
     def setup_method(self):
@@ -197,8 +195,9 @@ class TestRossetiSibParser:
 # ParseHandler integration tests
 # ---------------------------------------------------------------------------
 
+
 class TestParseHandler:
-    def _make_handler(self, raw_record, source=None):
+    def _make_handler(self, raw_record, source=None, **handler_kwargs):
         submitted = []
 
         async def submit(task: Task) -> None:
@@ -207,7 +206,7 @@ class TestParseHandler:
         raw_store = FakeRawStore(record=raw_record)
         source_store = FakeSourceStore(source=source)
         parsed_store = FakeParsedStore()
-        handler = ParseHandler(submit, raw_store, source_store, parsed_store)
+        handler = ParseHandler(submit, raw_store, source_store, parsed_store, **handler_kwargs)
         return handler, submitted, parsed_store
 
     def _make_task(self, raw_id: UUID) -> Task:
@@ -255,3 +254,68 @@ class TestParseHandler:
 
         assert submitted == []
         assert parsed_store.saved == []
+
+    async def test_normalization_can_be_disabled_by_profile(self):
+        source = FakeSource(parser_profile={"parser": "rosseti_sib", "normalize_enabled": False})
+        raw = FakeRawRecord(source_id=source.id, raw_content=json.dumps([_make_item()]))
+        handler, submitted, parsed_store = self._make_handler(raw, source)
+
+        await handler.handle(self._make_task(raw.id))
+
+        assert len(parsed_store.saved) == 1
+        assert submitted == []
+
+    async def test_normalization_limit_caps_enqueued_tasks(self):
+        source = FakeSource(parser_profile={"parser": "rosseti_sib", "normalize_limit": 1})
+        raw = FakeRawRecord(
+            source_id=source.id,
+            raw_content=json.dumps(
+                [
+                    _make_item(id="1", date_start=_today_str(1)),
+                    _make_item(id="2", date_start=_today_str(1)),
+                ]
+            ),
+        )
+        handler, submitted, parsed_store = self._make_handler(raw, source)
+
+        await handler.handle(self._make_task(raw.id))
+
+        assert len(parsed_store.saved[0]) == 2
+        assert len(submitted) == 1
+
+    async def test_global_llm_normalization_flag_disables_enqueue(self):
+        source = FakeSource(parser_profile={"parser": "rosseti_sib"})
+        raw = FakeRawRecord(source_id=source.id, raw_content=json.dumps([_make_item()]))
+        handler, submitted, parsed_store = self._make_handler(
+            raw,
+            source,
+            llm_normalization_enabled=False,
+        )
+
+        await handler.handle(self._make_task(raw.id))
+
+        assert len(parsed_store.saved) == 1
+        assert submitted == []
+
+    async def test_global_llm_normalization_cap_limits_enqueue(self):
+        source = FakeSource(parser_profile={"parser": "rosseti_sib"})
+        raw = FakeRawRecord(
+            source_id=source.id,
+            raw_content=json.dumps(
+                [
+                    _make_item(id="1", date_start=_today_str(1)),
+                    _make_item(id="2", date_start=_today_str(1)),
+                    _make_item(id="3", date_start=_today_str(1)),
+                ]
+            ),
+        )
+        handler, submitted, parsed_store = self._make_handler(
+            raw,
+            source,
+            llm_normalization_max_per_raw=2,
+        )
+
+        await handler.handle(self._make_task(raw.id))
+
+        assert len(parsed_store.saved[0]) == 3
+        assert len(submitted) == 2

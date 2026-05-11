@@ -6,6 +6,10 @@
 # 1. Скопировать конфиг и заполнить ключи
 cp .env.example .env
 
+# 1a. Секреты лучше держать в локальном override-файле
+# Файл .env.local читается приложением и docker-compose, но игнорируется git.
+echo "GIGACHAT_AUTH_KEY=..." > .env.local
+
 # 2. Установить зависимости (включая dev-инструменты)
 pip install -e ".[dev]"
 ```
@@ -31,6 +35,9 @@ python -m app.main --help
 # Полный стек в Docker (Postgres + app)
 docker compose up --build
 
+# Полный стек только для app-логов, если db уже поднята
+docker compose up --build app
+
 # Остановить Docker-сервисы
 docker compose down
 
@@ -39,6 +46,19 @@ docker compose down -v
 ```
 
 Доступные уровни: `DEBUG | INFO | WARNING | ERROR`.
+
+### Что означают горячие клавиши Docker Compose
+
+Когда `docker compose up` attached к контейнеру, внизу терминала может появиться панель:
+
+```text
+v View in Docker Desktop   o View Config   w Enable Watch   d Detach
+```
+
+- `d` — отсоединиться от логов, контейнер продолжит работать.
+- `Ctrl+C` — остановить attached app.
+- `w` — watch mode, для текущего проекта не нужен.
+- `v` / `o` — открыть Docker Desktop или посмотреть compose config.
 
 ## Тесты
 
@@ -108,12 +128,105 @@ SELECT location_region_code, location_district, location_city,
 FROM parsed_records
 ORDER BY start_time
 LIMIT 20;
+
+-- Нормализованные события
+SELECT event_type, location_raw, location_normalized, confidence, start_time, reason
+FROM normalized_events
+ORDER BY normalized_at DESC
+LIMIT 20;
+
+-- Быстрый smoke-статус
+SELECT COUNT(*) FROM raw_records;
+SELECT COUNT(*) FROM parsed_records;
+SELECT COUNT(*) FROM normalized_events;
+SELECT task_type, status, COUNT(*)
+FROM tasks
+GROUP BY task_type, status
+ORDER BY task_type, status;
+
+-- Очистить хвост LLM-задач после неудачного тестового запуска
+DELETE FROM tasks WHERE task_type = 'normalize_event';
+
+-- Оставить активным только маленький источник Томск
+UPDATE sources SET is_active = false;
+UPDATE sources SET is_active = true WHERE name ILIKE '%Томск%';
+
+-- Обновить защитные настройки нормализации в уже созданной БД
+UPDATE sources
+SET parser_profile = '{"parser":"rosseti_sib","date_filter_days":4,"normalize_enabled":false}'::json
+WHERE name ILIKE '%Сибир%';
+
+UPDATE sources
+SET parser_profile = '{"parser":"rosseti_tomsk","date_filter_days":4,"normalize_limit":3,"verify_ssl":false,"paginate":{"param":"PAGEN_1","max_pages":2}}'::json
+WHERE name ILIKE '%Томск%';
+
+UPDATE sources
+SET parser_profile = '{"parser":"eseti","date_filter_days":4,"normalize_enabled":false}'::json
+WHERE name ILIKE '%eseti%';
 ```
+
+## LLM-нормализация (GigaChat)
+
+Текущий провайдер — Sber GigaChat. Credentials кладутся в `.env` или `.env.local` (последний предпочтительнее — он только для секретов и в `.gitignore`).
+
+Два равноправных способа авторизации:
+
+```env
+# Способ 1: готовый Authorization Key из ЛК GigaChat (одной строкой)
+GIGACHAT_AUTH_KEY=<base64-строка>
+
+# Способ 2: Client ID и Client Secret отдельно — клиент сам соберёт base64
+GIGACHAT_CLIENT_ID=<id>
+GIGACHAT_CLIENT_SECRET=<secret>
+```
+
+Остальные поля имеют разумные defaults (см. `.env.example`):
+
+```env
+GIGACHAT_SCOPE=GIGACHAT_API_PERS
+GIGACHAT_MODEL=GigaChat-2
+GIGACHAT_VERIFY_SSL=false
+```
+
+Доступные модели для scope `GIGACHAT_API_PERS`: `GigaChat`, `GigaChat-2`, `GigaChat-2-Pro`, `GigaChat-2-Max`, `GigaChat-Pro`, `GigaChat-Max`, `GigaChat-Plus`. Запросить список с живого API:
+
+```bash
+# Требует валидный access_token (получи через первый прогон pipeline и логи)
+curl -k https://gigachat.devices.sberbank.ru/api/v1/models -H "Authorization: Bearer <token>"
+```
+
+Проверка нормализатора end-to-end (без БД):
+
+```bash
+python - <<'PY'
+import asyncio
+from datetime import UTC, datetime
+from uuid import uuid4
+from app.models.schemas import ParsedRecordSchema
+from app.normalization.llm import LLMNormalizer
+
+async def main():
+    record = ParsedRecordSchema(
+        id=uuid4(), raw_record_id=uuid4(), source_id=uuid4(),
+        start_time=datetime(2026, 5, 12, 3, tzinfo=UTC),
+        end_time=datetime(2026, 5, 12, 9, tzinfo=UTC),
+        location_city="г Новокузнецк", location_street="ул Ленина",
+        location_region_code="42", reason="Плановые работы",
+        extra={"houses": "12"}, trace_id=uuid4(), extracted_at=datetime.now(UTC),
+    )
+    event = await LLMNormalizer().normalize(record)
+    print(event)
+
+asyncio.run(main())
+PY
+```
+
+Cold-start: первый OAuth-запрос после старта процесса может изредка падать с `httpx.ConnectError` — повторный пройдёт. На прод-нагрузку — рассмотри retry на `ConnectError` в `gigachat_client.py`.
 
 ## Alembic (миграции)
 
 > Пока не настроен — схема создаётся через `Base.metadata.create_all` при старте.
-> Команды для будущего использования:
+> `alembic` не входит в текущие runtime-зависимости MVP. Команды ниже — ориентир для будущего шага после добавления зависимости и папки миграций.
 
 ```bash
 # Инициализация (один раз)

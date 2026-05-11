@@ -7,9 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml ./
-RUN pip install --upgrade pip && pip install .
-
 COPY app ./app
+RUN pip install --upgrade pip "wheel>=0.46.2" && pip install .
+
 COPY docs ./docs
 
 CMD ["python", "-m", "app.main"]

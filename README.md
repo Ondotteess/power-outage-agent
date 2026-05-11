@@ -19,8 +19,8 @@
 - [x] Расширение парсера до 2-3 источников (Россети Сибирь, Россети Томск, eseti.ru)
 - [x] Унификация формата RAW-данных (`RawRecord` + `ParsedRecord`)
 - [x] Обработка краевых случаев (пустые поля, битые данные, разные кодировки, SSL)
-- [ ] Подготовка промптов
-- [ ] Подключение LLM для нормализации
+- [x] Подготовка промптов
+- [x] Подключение LLM для нормализации
 - [ ] Улучшенный dedup (время + адрес + источники)
 
 ### Неделя 3 - матчинг 
@@ -42,6 +42,32 @@
 
 ## Текущий статус
 
+**12.05.2026 — LLM-нормализатор: GigaChat**
+
+После `ParsedRecord` добавлен следующий слой pipeline:
+
+```text
+PARSE_CONTENT → ParsedStore.save_many → NORMALIZE_EVENT → LLMNormalizer (GigaChat) → normalized_events
+```
+
+Что появилось:
+
+- `app/normalization/gigachat_client.py` — async-клиент Sber GigaChat: OAuth-flow (Basic auth → `/api/v2/oauth` → access_token), кеш токена в памяти на 30 минут, chat completion на `/api/v1/chat/completions`. Типизированные исключения (`GigaChatAuthError`, `GigaChatHTTPError`, `GigaChatInvalidResponseError`). Не логирует `auth_key` / `access_token` / `Authorization`-заголовок.
+- `app/normalization/llm.py::LLMNormalizer` — использует `GigaChatClient` как транспорт. Промпт требует строгий JSON, без markdown-обёртки; есть фолбэк `_strip_json_fences` на случай ` ```json ``` ` обёртки. Возвращает `NormalizedEventSchema | None`. Transport-ошибки бросаются наружу (Dispatcher делает retry); LLM-ошибки (битый JSON, нарушение схемы) → `None`.
+- Таблица `normalized_events` + `NormalizedEventStore` (как было).
+- `NormalizationHandler` зарегистрирован на `NORMALIZE_EVENT` в Dispatcher (как было).
+- В `parser_profile`: `normalize_enabled=false` и `normalize_limit=N` для troттлинга на крупных источниках.
+
+Конфиг (GigaChat — единственный активный LLM-провайдер):
+- `GIGACHAT_AUTH_KEY` (base64 `client_id:client_secret`, готовый Authorization Key из ЛК)  **или**  `GIGACHAT_CLIENT_ID` + `GIGACHAT_CLIENT_SECRET` (клиент сам соберёт base64).
+- `GIGACHAT_SCOPE=GIGACHAT_API_PERS`, `GIGACHAT_MODEL=GigaChat-2`, `GIGACHAT_VERIFY_SSL=false` (Russian Trusted Root CA отсутствуют в `certifi`).
+
+Поля `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` оставлены как baseline под DeepSeek для будущего переключения провайдеров — сейчас не используются.
+
+End-to-end проверка вживую: OAuth → токен → chat/completions → полный `NormalizedEventSchema` (event_type, location.normalized, confidence). 88 тестов зелёных, ruff чист.
+
+---
+
 **12.05.2026 — реестр источников закрыт**
 
 Реестр источников финализирован — три параллельные ветки парсинга:
@@ -52,11 +78,11 @@
 | Россети Томск | HTML + Bitrix-пагинация (`PAGEN_1`) | Сорт DESC по дате, 2 страниц хватает; SSL отключён (российский корневой УЦ) | ~10 |
 | eseti.ru | JSON-API (DotNetNuke `/API/Shutdown`) | Один запрос на 2728 записей; ISO-даты, UTC+7 | ~1950 |
 
-Все три источника подключаются через `parser_profile` (JSON в `sources`): `parser` (имя в реестре), `paginate`, `date_params`, `verify_ssl`, `date_filter_days`. Добавление нового источника = одна строка в seed + новый парсер.
+Все три источника подключаются через `parser_profile` (JSON в `sources`): `parser` (имя в реестре), `paginate`, `date_params`, `verify_ssl`, `date_filter_days`, `normalize_enabled`, `normalize_limit`. Добавление нового источника = одна строка в seed + новый парсер.
 
-Новых модулей сейчас не закладываем — на следующей итерации идём в LLM-нормализацию: освобождаем парсеры от эвристик (например, тот же сплит локалити Tomsk-парсера переедет в промпт), приводим адреса к единому формату, и подключаем дедуп нормализованных событий по композитному ключу адрес+время.
+Следующая итерация после LLM-нормализации: дедуп нормализованных событий по композитному ключу адрес+время и Office Matcher. Часть эвристик парсеров (например, сплит локалити Tomsk-парсера) постепенно должна переехать в нормализацию.
 
-Тестов 61, все зелёные. Linter чистый.
+Тестов 88 (включая нормализатор и GigaChat-клиент), все зелёные. Linter чист.
 
 ---
 
@@ -64,9 +90,9 @@
 
 Pipeline вытаскивает реальные данные из двух источников: Россети Сибирь (JSON-API на 18к записей за запрос) и Россети Томск (HTML с Bitrix-пагинацией). Между collector и parser добавлен ParseHandler с реестром парсеров, в `parser_profile` источника описывается всё специфичное — какой парсер, пагинация (`PAGEN_1` со стопом по `max_pages`), подстановка дат в URL (`date_start`/`date_end`), отключение SSL-валидации (для сайтов на российских корневых сертификатах). Новая таблица `parsed_records` хранит структурированные записи перед нормализацией; даты приводятся к UTC, локалити сплитится на регион/район/город.
 
-Тестов 49, все зелёные. Linter чистый.
+Исторически на этом этапе было 49 зелёных тестов и чистый linter.
 
-На следующей неделе: подключение LLM-нормализации (DeepSeek/GigaChat), Office Matcher и нормализация адресов через DaData, отказ от хардкод-семантики локалити в пользу LLM.  Дедуп нормализованных событий по композитному ключу адрес+время.
+Следующий шаг из этого статуса уже выполнен: LLM-нормализация подключена через GigaChat (Sber, OAuth + chat/completions). Остаются Office Matcher, улучшенный dedup и калибровка промпта для более качественного `location.normalized`.
 
 ---
 

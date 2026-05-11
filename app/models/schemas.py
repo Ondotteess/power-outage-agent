@@ -57,6 +57,7 @@ class LocationSchema(BaseModel):
 
 class NormalizedEventSchema(BaseModel):
     event_id: UUID
+    parsed_record_id: UUID | None = None
     event_type: EventType
     start_time: datetime
     end_time: datetime | None = None

@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+import pytest
+
 from app.models.schemas import RawRecordSchema, SourceType
 from app.parsers.base import BaseCollector
 from app.workers.collector import CollectorHandler
@@ -132,8 +134,6 @@ async def test_collector_paginates_with_parser_profile():
     async def varying_fetch(url: str, trace_id: UUID, verify_ssl: bool = True):
         fetched_urls.append(url)
         raw = await original_fetch(url, trace_id, verify_ssl=verify_ssl)
-        # rewrite hash to be url-dependent
-        import hashlib
         raw.content_hash = hashlib.sha256(url.encode()).hexdigest()
         return raw
 
@@ -161,6 +161,41 @@ async def test_collector_paginates_with_parser_profile():
         "https://x/list?PAGEN_1=2",
         "https://x/list?PAGEN_1=3",
     ]
+
+
+async def test_collector_caps_pagination_from_parser_profile():
+    fetched_urls: list[str] = []
+
+    class CapturingCollector(FakeHtmlCollector):
+        async def fetch(self, url: str, trace_id: UUID, verify_ssl: bool = True):
+            fetched_urls.append(url)
+            raw = await super().fetch(url, trace_id, verify_ssl=verify_ssl)
+            raw.content_hash = hashlib.sha256(url.encode()).hexdigest()
+            return raw
+
+    source_id = uuid4()
+    source = FakeSource(
+        id=source_id,
+        parser_profile={"paginate": {"param": "page", "max_pages": 1000}},
+    )
+
+    handler = CollectorHandler(
+        lambda _t: _noop(),
+        FakeRawStore(),
+        source_store=FakeSourceStore(source=source),
+        collectors={"html": CapturingCollector()},
+    )
+
+    await handler.handle(
+        Task(
+            task_type=TaskType.FETCH_SOURCE,
+            payload={"url": "https://x/list", "source_id": str(source_id), "source_type": "html"},
+            trace_id=uuid4(),
+        )
+    )
+
+    assert len(fetched_urls) == 10
+    assert fetched_urls[-1] == "https://x/list?page=10"
 
 
 async def test_collector_injects_date_params_from_profile():
@@ -203,6 +238,42 @@ async def test_collector_injects_date_params_from_profile():
     assert fetched_urls == [f"https://x/list?date_start={today}&date_end={cutoff}"]
 
 
+async def test_collector_preserves_existing_query_params_when_paginating():
+    fetched_urls: list[str] = []
+
+    class CapturingCollector(FakeHtmlCollector):
+        async def fetch(self, url: str, trace_id: UUID, verify_ssl: bool = True):
+            fetched_urls.append(url)
+            return await super().fetch(url, trace_id, verify_ssl=verify_ssl)
+
+    source_id = uuid4()
+    source = FakeSource(
+        id=source_id,
+        parser_profile={"paginate": {"param": "PAGEN_1", "max_pages": 1}},
+    )
+
+    handler = CollectorHandler(
+        lambda _t: _noop(),
+        FakeRawStore(),
+        source_store=FakeSourceStore(source=source),
+        collectors={"html": CapturingCollector()},
+    )
+
+    await handler.handle(
+        Task(
+            task_type=TaskType.FETCH_SOURCE,
+            payload={
+                "url": "https://x/list?foo=bar",
+                "source_id": str(source_id),
+                "source_type": "html",
+            },
+            trace_id=uuid4(),
+        )
+    )
+
+    assert fetched_urls == ["https://x/list?foo=bar&PAGEN_1=1"]
+
+
 async def _noop():
     return None
 
@@ -220,9 +291,5 @@ async def test_collector_rejects_unknown_source_type():
         trace_id=uuid4(),
     )
 
-    try:
+    with pytest.raises(ValueError, match="telegram"):
         await handler.handle(task)
-    except ValueError as e:
-        assert "telegram" in str(e)
-    else:  # pragma: no cover
-        raise AssertionError("expected ValueError")

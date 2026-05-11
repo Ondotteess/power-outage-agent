@@ -17,7 +17,12 @@ services:
 
   app:
     build: .
-    env_file: .env
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/outage_agent
     depends_on:
       db:
         condition: service_healthy

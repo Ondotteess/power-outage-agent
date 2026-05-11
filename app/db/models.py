@@ -67,6 +67,34 @@ class ParsedRecord(Base):
     extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class NormalizedEvent(Base):
+    __tablename__ = "normalized_events"
+    __table_args__ = (
+        Index("ix_normalized_events_parsed_record_id", "parsed_record_id"),
+        Index("ix_normalized_events_address_time", "location_normalized", "start_time", "end_time"),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    parsed_record_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("parsed_records.id"), nullable=True
+    )
+    event_type: Mapped[str] = mapped_column(String(50))
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    location_raw: Mapped[str] = mapped_column(Text)
+    location_normalized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    location_city: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    location_street: Mapped[str | None] = mapped_column(Text, nullable=True)
+    location_building: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    confidence: Mapped[float] = mapped_column(default=0.0)
+    trace_id: Mapped[UUID] = mapped_column(Uuid)
+    normalized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class TaskRecord(Base):
     __tablename__ = "tasks"
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Protocol
 from uuid import UUID
 
+from app.models.schemas import ParsedRecordSchema
 from app.parsers.eseti import EsetiParser
 from app.parsers.rosseti_sib import RossetiSibParser
 from app.parsers.rosseti_tomsk import RossetiTomskParser
@@ -13,8 +15,20 @@ logger = logging.getLogger(__name__)
 
 Submit = Callable[[Task], Awaitable[None]]
 
+
+class ParserProtocol(Protocol):
+    def parse(
+        self,
+        raw_content: str,
+        raw_record_id: UUID,
+        source_id: UUID | None,
+        trace_id: UUID,
+        parser_profile: dict,
+    ) -> list[ParsedRecordSchema]: ...
+
+
 # Registry: parser_profile["parser"] value → parser instance
-_PARSER_REGISTRY: dict[str, object] = {
+_PARSER_REGISTRY: dict[str, ParserProtocol] = {
     "rosseti_sib": RossetiSibParser(),
     "rosseti_tomsk": RossetiTomskParser(),
     "eseti": EsetiParser(),
@@ -30,11 +44,16 @@ class ParseHandler:
         raw_store,
         source_store,
         parsed_store,
+        *,
+        llm_normalization_enabled: bool = True,
+        llm_normalization_max_per_raw: int | None = None,
     ) -> None:
         self._submit = submit
         self._raw_store = raw_store
         self._source_store = source_store
         self._parsed_store = parsed_store
+        self._llm_normalization_enabled = llm_normalization_enabled
+        self._llm_normalization_max_per_raw = llm_normalization_max_per_raw
 
     async def handle(self, task: Task) -> None:
         raw_id = UUID(task.payload["raw_record_id"])
@@ -88,7 +107,40 @@ class ParseHandler:
         if records:
             await self._parsed_store.save_many(records)
 
-        for record in records:
+        if not self._llm_normalization_enabled:
+            logger.info(
+                "ParseHandler  LLM normalization globally disabled  raw_id=%s  parsed_count=%d  trace=%s",
+                raw_id,
+                len(records),
+                task.trace_id,
+            )
+            return
+
+        if not parser_profile.get("normalize_enabled", True):
+            logger.info(
+                "ParseHandler  normalization disabled  raw_id=%s  parsed_count=%d  trace=%s",
+                raw_id,
+                len(records),
+                task.trace_id,
+            )
+            return
+
+        normalize_limit = _effective_normalize_limit(
+            parser_profile.get("normalize_limit"),
+            self._llm_normalization_max_per_raw,
+        )
+        records_to_normalize = records
+        if normalize_limit is not None:
+            records_to_normalize = records[:normalize_limit]
+            logger.info(
+                "ParseHandler  normalization limited  raw_id=%s  limit=%d/%d  trace=%s",
+                raw_id,
+                len(records_to_normalize),
+                len(records),
+                task.trace_id,
+            )
+
+        for record in records_to_normalize:
             normalize_task = Task(
                 task_type=TaskType.NORMALIZE_EVENT,
                 payload={"parsed_record_id": str(record.id)},
@@ -101,3 +153,17 @@ class ParseHandler:
                 task.trace_id,
             )
             await self._submit(normalize_task)
+
+
+def _effective_normalize_limit(
+    source_limit: object,
+    global_limit: int | None,
+) -> int | None:
+    limits: list[int] = []
+    if source_limit is not None:
+        limits.append(max(0, int(source_limit)))
+    if global_limit is not None:
+        limits.append(max(0, int(global_limit)))
+    if not limits:
+        return None
+    return min(limits)

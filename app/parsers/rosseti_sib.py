@@ -117,7 +117,9 @@ class RossetiSibParser:
         time_finish_str = item.get("time_finish", "").strip()
 
         start_time = _parse_dt(date_start_str, time_start_str, _DEFAULT_TZ)
-        end_time = _parse_dt(date_finish_str, time_finish_str, _DEFAULT_TZ) if time_finish_str else None
+        end_time = (
+            _parse_dt(date_finish_str, time_finish_str, _DEFAULT_TZ) if time_finish_str else None
+        )
 
         return ParsedRecordSchema(
             id=uuid4(),

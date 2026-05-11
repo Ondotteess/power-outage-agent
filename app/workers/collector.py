@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID
 
 from app.db.repositories import RawStore, SourceStore
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 Submit = Callable[[Task], Awaitable[None]]
 
 _DATE_FMT = "%d.%m.%Y"
+_DEFAULT_MAX_PAGES = 5
+_MAX_PAGES = 10
+_DEFAULT_DATE_FILTER_DAYS = 4
+_MAX_DATE_FILTER_DAYS = 14
 
 
 def default_collectors() -> dict[str, BaseCollector]:
@@ -97,8 +102,13 @@ class CollectorHandler:
             return [url_with_dates]
 
         param = paginate.get("param", "PAGEN_1")
-        max_pages = int(paginate.get("max_pages", 5))
-        return [_add_param(url_with_dates, param, str(p)) for p in range(1, max_pages + 1)]
+        max_pages = _bounded_int(
+            paginate.get("max_pages", _DEFAULT_MAX_PAGES),
+            default=_DEFAULT_MAX_PAGES,
+            minimum=1,
+            maximum=_MAX_PAGES,
+        )
+        return [_add_query_param(url_with_dates, param, str(p)) for p in range(1, max_pages + 1)]
 
     def _apply_date_params(self, url: str, parser_profile: dict) -> str:
         date_params: dict[str, str] = parser_profile.get("date_params", {})
@@ -106,7 +116,12 @@ class CollectorHandler:
             return url
 
         today = date.today()
-        window = int(parser_profile.get("date_filter_days", 4))
+        window = _bounded_int(
+            parser_profile.get("date_filter_days", _DEFAULT_DATE_FILTER_DAYS),
+            default=_DEFAULT_DATE_FILTER_DAYS,
+            minimum=0,
+            maximum=_MAX_DATE_FILTER_DAYS,
+        )
         cutoff = today + timedelta(days=window)
         values = {
             "today": today.strftime(_DATE_FMT),
@@ -116,7 +131,7 @@ class CollectorHandler:
         result = url
         for param_name, value_template in date_params.items():
             value = values.get(value_template, value_template)
-            result = _add_param(result, param_name, value)
+            result = _add_query_param(result, param_name, value)
         return result
 
     async def _fetch_and_persist(
@@ -168,6 +183,16 @@ class CollectorHandler:
         await self._submit(parse_task)
 
 
-def _add_param(url: str, name: str, value: str) -> str:
-    sep = "&" if "?" in url else "?"
-    return f"{url}{sep}{name}={value}"
+def _add_query_param(url: str, name: str, value: str) -> str:
+    parts = urlsplit(url)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    query.append((name, value))
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))

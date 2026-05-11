@@ -56,7 +56,9 @@ class RossetiTomskParser:
             if td is None:
                 continue
             try:
-                rec = self._parse_row(td, raw_record_id, source_id, trace_id, today, cutoff, now_utc)
+                rec = self._parse_row(
+                    td, raw_record_id, source_id, trace_id, today, cutoff, now_utc
+                )
                 if rec is not None:
                     results.append(rec)
             except Exception:
