@@ -47,6 +47,8 @@ class ParseHandler:
         *,
         llm_normalization_enabled: bool = True,
         llm_normalization_max_per_raw: int | None = None,
+        parser_profile_override: dict | None = None,
+        llm_normalization_max_per_source: int | None = None,
     ) -> None:
         self._submit = submit
         self._raw_store = raw_store
@@ -54,6 +56,9 @@ class ParseHandler:
         self._parsed_store = parsed_store
         self._llm_normalization_enabled = llm_normalization_enabled
         self._llm_normalization_max_per_raw = llm_normalization_max_per_raw
+        self._parser_profile_override = parser_profile_override or {}
+        self._llm_normalization_max_per_source = llm_normalization_max_per_source
+        self._normalized_per_source: dict[UUID | None, int] = {}
 
     async def handle(self, task: Task) -> None:
         raw_id = UUID(task.payload["raw_record_id"])
@@ -77,6 +82,8 @@ class ParseHandler:
             source = await self._source_store.get_by_id(raw.source_id)
             if source is not None:
                 parser_profile = source.parser_profile or {}
+        if self._parser_profile_override:
+            parser_profile = {**parser_profile, **self._parser_profile_override}
 
         parser_name: str = parser_profile.get("parser", "")
         parser = _PARSER_REGISTRY.get(parser_name)
@@ -140,6 +147,16 @@ class ParseHandler:
                 task.trace_id,
             )
 
+        records_to_normalize = self._apply_source_budget(raw.source_id, records_to_normalize)
+        if not records_to_normalize:
+            logger.info(
+                "ParseHandler  source normalization budget exhausted  raw_id=%s  source_id=%s  trace=%s",
+                raw_id,
+                raw.source_id,
+                task.trace_id,
+            )
+            return
+
         for record in records_to_normalize:
             normalize_task = Task(
                 task_type=TaskType.NORMALIZE_EVENT,
@@ -153,6 +170,20 @@ class ParseHandler:
                 task.trace_id,
             )
             await self._submit(normalize_task)
+
+    def _apply_source_budget(
+        self,
+        source_id: UUID | None,
+        records: list[ParsedRecordSchema],
+    ) -> list[ParsedRecordSchema]:
+        if self._llm_normalization_max_per_source is None:
+            return records
+        limit = max(0, self._llm_normalization_max_per_source)
+        used = self._normalized_per_source.get(source_id, 0)
+        remaining = max(0, limit - used)
+        selected = records[:remaining]
+        self._normalized_per_source[source_id] = used + len(selected)
+        return selected
 
 
 def _effective_normalize_limit(

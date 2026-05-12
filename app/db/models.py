@@ -1,7 +1,17 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.engine import Base
@@ -70,6 +80,14 @@ class ParsedRecord(Base):
 class NormalizedEvent(Base):
     __tablename__ = "normalized_events"
     __table_args__ = (
+        UniqueConstraint("parsed_record_id", name="uq_normalized_events_parsed_record_id"),
+        UniqueConstraint(
+            "event_type",
+            "location_normalized",
+            "start_time",
+            "end_time",
+            name="uq_normalized_events_exact_window",
+        ),
         Index("ix_normalized_events_parsed_record_id", "parsed_record_id"),
         Index("ix_normalized_events_address_time", "location_normalized", "start_time", "end_time"),
     )
@@ -93,6 +111,45 @@ class NormalizedEvent(Base):
     confidence: Mapped[float] = mapped_column(default=0.0)
     trace_id: Mapped[UUID] = mapped_column(Uuid)
     normalized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Office(Base):
+    __tablename__ = "offices"
+    __table_args__ = (
+        UniqueConstraint("name", "city", "address", name="uq_offices_name_city_address"),
+        Index("ix_offices_city_address", "city", "address"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(String(255))
+    city: Mapped[str] = mapped_column(String(255))
+    address: Mapped[str] = mapped_column(Text)
+    region: Mapped[str] = mapped_column(String(64))
+    is_active: Mapped[bool] = mapped_column(default=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    extra: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class OfficeImpact(Base):
+    __tablename__ = "office_impacts"
+    __table_args__ = (
+        UniqueConstraint("office_id", "event_id", name="uq_office_impacts_office_event"),
+        Index("ix_office_impacts_event_id", "event_id"),
+        Index("ix_office_impacts_office_start", "office_id", "impact_start"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    office_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("offices.id"))
+    event_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("normalized_events.event_id"))
+    impact_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    impact_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    impact_level: Mapped[str] = mapped_column(String(20))
+    match_strategy: Mapped[str] = mapped_column(String(64))
+    match_score: Mapped[float] = mapped_column(Float, default=0.0)
+    trace_id: Mapped[UUID] = mapped_column(Uuid)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class TaskRecord(Base):

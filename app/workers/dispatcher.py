@@ -40,6 +40,7 @@ class Dispatcher:
         self._handlers: dict[TaskType, Handler] = {}
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max
+        self._delayed_retries: set[asyncio.Task[None]] = set()
 
     def register(self, task_type: TaskType, handler: Handler) -> None:
         self._handlers[task_type] = handler
@@ -56,6 +57,18 @@ class Dispatcher:
         )
         await self._store.upsert(task, status="pending")
         await self._queue.put(task)
+
+    async def join(self) -> None:
+        """Wait until the queue and delayed retry backlog are fully drained."""
+        while True:
+            await self._queue.join()
+            pending_retries = [task for task in self._delayed_retries if not task.done()]
+            if not pending_retries:
+                await asyncio.sleep(0)
+                if self._queue.unfinished_tasks == 0:
+                    return
+                continue
+            await asyncio.wait(pending_retries, return_when=asyncio.FIRST_COMPLETED)
 
     async def run(self) -> None:
         logger.info(
@@ -129,5 +142,10 @@ class Dispatcher:
             exc,
         )
         await self._store.upsert(task, status="pending", error=str(exc))
+        retry = asyncio.create_task(self._requeue_after_delay(task, backoff))
+        self._delayed_retries.add(retry)
+        retry.add_done_callback(self._delayed_retries.discard)
+
+    async def _requeue_after_delay(self, task: Task, backoff: int) -> None:
         await asyncio.sleep(backoff)
         await self._queue.put(task)

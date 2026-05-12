@@ -39,3 +39,13 @@ async def test_queue_put_get_roundtrip():
     got = await queue.get()
     assert got is task
     queue.task_done()
+
+
+async def test_queue_join_waits_until_task_done():
+    queue = TaskQueue()
+    task = Task(task_type=TaskType.FETCH_SOURCE, payload={"url": "x"}, trace_id=uuid4())
+    await queue.put(task)
+    got = await queue.get()
+    assert got is task
+    queue.task_done()
+    await queue.join()

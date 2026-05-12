@@ -39,6 +39,12 @@ class FakeRawStore:
     async def exists_by_hash(self, content_hash: str) -> bool:
         return content_hash in self.seen_hashes
 
+    async def get_id_by_hash(self, content_hash: str) -> UUID | None:
+        for raw, _source_id in self.saved:
+            if raw.content_hash == content_hash:
+                return raw.id
+        return None
+
     async def save(self, raw: RawRecordSchema, source_id: UUID | None) -> None:
         self.saved.append((raw, source_id))
         self.seen_hashes.add(raw.content_hash)
@@ -97,6 +103,37 @@ async def test_collector_skips_duplicate_content_hash():
 
     assert raw_store.saved == []
     assert submitted == []
+
+
+async def test_collector_can_reparse_duplicate_content_hash():
+    submitted: list[Task] = []
+
+    async def submit(task: Task) -> None:
+        submitted.append(task)
+
+    body = "<html>same</html>"
+    existing_raw = RawRecordSchema(
+        id=uuid4(),
+        source_url="https://example.com/outages",
+        source_type=SourceType.HTML,
+        raw_content=body,
+        content_hash=hashlib.sha256(body.encode()).hexdigest(),
+        fetched_at=datetime.now(UTC),
+        trace_id=uuid4(),
+    )
+    raw_store = FakeRawStore(
+        seen_hashes={existing_raw.content_hash},
+        saved=[(existing_raw, uuid4())],
+    )
+    handler = CollectorHandler(submit, raw_store, collectors={"html": FakeHtmlCollector(body=body)})
+    task = _fetch_task(uuid4())
+    task.payload["reparse_duplicate"] = True
+
+    await handler.handle(task)
+
+    assert len(submitted) == 1
+    assert submitted[0].task_type == TaskType.PARSE_CONTENT
+    assert submitted[0].payload["raw_record_id"] == str(existing_raw.id)
 
 
 @dataclass

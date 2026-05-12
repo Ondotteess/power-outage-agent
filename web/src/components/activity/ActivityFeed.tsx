@@ -1,5 +1,6 @@
 import type { ActivityEvent } from "@/lib/api/types";
-import { StatusDot, statusTone } from "@/components/ui/Badge";
+import { StatusDot } from "@/components/ui/Badge";
+import { statusTone } from "@/components/ui/statusTone";
 import { fmtRelative } from "@/lib/format";
 
 const TYPE_LABEL: Record<ActivityEvent["type"], string> = {

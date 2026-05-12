@@ -157,6 +157,9 @@ export interface Office {
   city: string;
   address: string;
   region: string;
+  is_active?: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface OfficeImpact {
@@ -168,6 +171,7 @@ export interface OfficeImpact {
   impact_end: string | null;
   impact_level: "low" | "medium" | "high";
   match_strategy: string;
+  match_score?: number;
   detected_at: string;
 }
 

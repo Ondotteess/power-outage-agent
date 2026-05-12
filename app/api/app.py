@@ -16,8 +16,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routers import dashboard, pipeline, records, sources, tasks
-from app.db.engine import init_db
+from app.api.routers import dashboard, offices, pipeline, records, sources, tasks
+from app.db.engine import async_session_factory, init_db
+from app.db.repositories import OfficeStore
+from app.matching.defaults import DEFAULT_OFFICES
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # come up even before the pipeline has been started for the first time.
     try:
         await init_db()
+        await OfficeStore(async_session_factory).seed_if_empty(DEFAULT_OFFICES)
         logger.info("Admin API: database schema ready")
     except OSError as exc:
         logger.error("Admin API: cannot reach database: %s", exc)
@@ -51,6 +54,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(dashboard.router)
+    app.include_router(offices.router)
     app.include_router(pipeline.router)
     app.include_router(sources.router)
     app.include_router(records.router)

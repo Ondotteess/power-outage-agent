@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
 
 from app.models.schemas import NormalizedEventSchema, ParsedRecordSchema
-from app.workers.queue import Task
+from app.workers.queue import Task, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class ParsedStoreProtocol(Protocol):
 
 
 class NormalizedEventStoreProtocol(Protocol):
-    async def save(self, event: NormalizedEventSchema, trace_id: UUID) -> None: ...
+    async def save(self, event: NormalizedEventSchema, trace_id: UUID) -> UUID: ...
 
 
 class NormalizerProtocol(Protocol):
@@ -30,10 +31,12 @@ class NormalizationHandler:
         parsed_store: ParsedStoreProtocol,
         normalized_store: NormalizedEventStoreProtocol,
         normalizer: NormalizerProtocol,
+        submit: Callable[[Task], Awaitable[None]] | None = None,
     ) -> None:
         self._parsed_store = parsed_store
         self._normalized_store = normalized_store
         self._normalizer = normalizer
+        self._submit = submit
 
     async def handle(self, task: Task) -> None:
         parsed_id = UUID(task.payload["parsed_record_id"])
@@ -63,13 +66,22 @@ class NormalizationHandler:
             )
             return
 
-        await self._normalized_store.save(normalized, trace_id=task.trace_id)
+        event_id = await self._normalized_store.save(normalized, trace_id=task.trace_id)
         logger.info(
             "NormalizationHandler  normalized  parsed_id=%s  event_id=%s  trace=%s",
             parsed_id,
-            normalized.event_id,
+            event_id,
             task.trace_id,
         )
+
+        if self._submit is not None:
+            await self._submit(
+                Task(
+                    task_type=TaskType.MATCH_OFFICES,
+                    payload={"event_id": str(event_id)},
+                    trace_id=task.trace_id,
+                )
+            )
 
 
 def _to_schema(record) -> ParsedRecordSchema:

@@ -51,8 +51,9 @@ class FakeParsedStore:
 class FakeNormalizedStore:
     saved: list[tuple[NormalizedEventSchema, UUID]] = field(default_factory=list)
 
-    async def save(self, event: NormalizedEventSchema, trace_id: UUID) -> None:
+    async def save(self, event: NormalizedEventSchema, trace_id: UUID) -> UUID:
         self.saved.append((event, trace_id))
+        return event.event_id
 
 
 @dataclass
@@ -97,7 +98,12 @@ async def test_normalization_handler_saves_normalized_event():
     expected = _event(parsed.id, parsed.raw_record_id)
     store = FakeNormalizedStore()
     normalizer = FakeNormalizer(expected)
-    handler = NormalizationHandler(FakeParsedStore(parsed), store, normalizer)
+    submitted: list[Task] = []
+
+    async def submit(task: Task) -> None:
+        submitted.append(task)
+
+    handler = NormalizationHandler(FakeParsedStore(parsed), store, normalizer, submit)
     task = _task(parsed.id)
 
     await handler.handle(task)
@@ -105,6 +111,9 @@ async def test_normalization_handler_saves_normalized_event():
     assert len(normalizer.seen) == 1
     assert normalizer.seen[0].id == parsed.id
     assert store.saved == [(expected, task.trace_id)]
+    assert len(submitted) == 1
+    assert submitted[0].task_type == TaskType.MATCH_OFFICES
+    assert submitted[0].payload == {"event_id": str(expected.event_id)}
 
 
 async def test_normalization_handler_raises_when_parsed_missing():

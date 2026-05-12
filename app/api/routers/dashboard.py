@@ -15,7 +15,7 @@ from app.api.schemas import (
     NormalizationQuality,
     QueueBacklogPoint,
 )
-from app.db.models import NormalizedEvent, ParsedRecord, RawRecord, TaskRecord
+from app.db.models import NormalizedEvent, Office, OfficeImpact, ParsedRecord, RawRecord
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -42,6 +42,7 @@ async def summary(session: SessionDep) -> DashboardSummary:
 
     task_counts = await queries.count_tasks_by_status(session)
     failed = task_counts.get("failed", 0)
+    offices_at_risk = await queries.count_active_office_impacts(session, datetime.now(UTC))
 
     pct_raw, label_raw, status_raw = _delta(raw_today, raw_prev)
     pct_parsed, label_parsed, status_parsed = _delta(parsed_today, parsed_prev)
@@ -61,7 +62,12 @@ async def summary(session: SessionDep) -> DashboardSummary:
         ),
         duplicates_skipped=KpiDelta(value=0, status="neutral"),
         failed_tasks=KpiDelta(value=failed, status="error" if failed else "success"),
-        offices_at_risk=KpiDelta(value=0, status="neutral"),
+        offices_at_risk=KpiDelta(
+            value=offices_at_risk,
+            delta_pct=None,
+            delta_label="active/future",
+            status="warning" if offices_at_risk else "success",
+        ),
     )
 
 
@@ -117,40 +123,31 @@ async def activity(
             )
         )
 
-    normalized_rows = (
-        (
-            await session.execute(
-                select(NormalizedEvent)
-                .order_by(desc(NormalizedEvent.normalized_at))
-                .limit(limit // 3 + 5)
-            )
+    impact_rows = (
+        await session.execute(
+            select(OfficeImpact, Office)
+            .join(Office, Office.id == OfficeImpact.office_id)
+            .order_by(desc(OfficeImpact.detected_at))
+            .limit(limit // 3 + 5)
         )
-        .scalars()
-        .all()
-    )
-    for n in normalized_rows:
+    ).all()
+    for impact, office in impact_rows:
+        severity = "error" if impact.impact_level == "high" else "warning"
         items.append(
             ActivityEvent(
-                id=f"norm-{n.event_id}",
+                id=f"impact-{impact.id}",
                 type="OfficeImpactDetected",
-                severity="warning" if (n.confidence or 0) < 0.6 else "success",
-                source=None,
-                message=f"Normalized event: {n.location_normalized or n.location_raw[:80]}",
-                at=n.normalized_at,
+                severity=severity,
+                source=office.name,
+                message=f"{office.name}: {impact.match_strategy} match",
+                at=impact.detected_at,
             )
         )
 
-    task_rows = (
-        (
-            await session.execute(
-                select(TaskRecord)
-                .where(TaskRecord.status == "failed")
-                .order_by(desc(TaskRecord.updated_at))
-                .limit(limit // 3 + 5)
-            )
-        )
-        .scalars()
-        .all()
+    task_rows = await queries.list_tasks(
+        session,
+        status="failed",
+        limit=limit // 3 + 5,
     )
     for t in task_rows:
         items.append(

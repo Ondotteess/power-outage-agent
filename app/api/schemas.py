@@ -76,6 +76,30 @@ class NormalizedEventOut(BaseModel):
     normalized_at: datetime
 
 
+class OfficeOut(BaseModel):
+    id: UUID
+    name: str
+    city: str
+    address: str
+    region: str
+    is_active: bool
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class OfficeImpactOut(BaseModel):
+    id: UUID
+    office_id: UUID
+    office_name: str
+    event_id: UUID
+    impact_start: datetime
+    impact_end: datetime | None
+    impact_level: str
+    match_strategy: str
+    match_score: float
+    detected_at: datetime
+
+
 # ── Tasks / DLQ ────────────────────────────────────────────────────────────
 
 

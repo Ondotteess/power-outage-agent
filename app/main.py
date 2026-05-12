@@ -2,18 +2,30 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 from app.config import settings
 from app.db.engine import async_session_factory, init_db
-from app.db.repositories import NormalizedEventStore, ParsedStore, RawStore, SourceStore, TaskStore
+from app.db.repositories import (
+    NormalizedEventStore,
+    OfficeImpactStore,
+    OfficeStore,
+    ParsedStore,
+    RawStore,
+    SourceStore,
+    TaskStore,
+)
+from app.matching.defaults import DEFAULT_OFFICES
 from app.normalization.llm import LLMNormalizer
 from app.workers.collector import CollectorHandler
 from app.workers.dispatcher import Dispatcher
+from app.workers.matcher import OfficeMatchHandler
 from app.workers.normalizer import NormalizationHandler
 from app.workers.parser import ParseHandler
-from app.workers.queue import TaskQueue, TaskType
+from app.workers.queue import Task, TaskQueue, TaskType
 from app.workers.scheduler import Scheduler, SourceConfig
 
 logger = logging.getLogger(__name__)
@@ -75,6 +87,21 @@ def _parse_args() -> argparse.Namespace:
         metavar="LEVEL",
         help=f"Logging level: {' | '.join(_LOG_LEVELS)}. Default: {settings.log_level} (from .env)",
     )
+    parser.add_argument(
+        "--smoke-e2e",
+        action="store_true",
+        help=(
+            "Run every configured source once, force LLM normalization on, "
+            "normalize only N parsed records per source, then exit."
+        ),
+    )
+    parser.add_argument(
+        "--smoke-normalize-limit",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Number of parsed records per source to normalize in --smoke-e2e mode.",
+    )
     return parser.parse_args()
 
 
@@ -108,16 +135,17 @@ def _redact_dsn(dsn: str) -> str:
         return "<invalid database_url>"
 
 
-async def _bootstrap_sources(scheduler: Scheduler) -> None:
+async def _load_source_configs(*, include_inactive: bool = False) -> list[SourceConfig]:
     source_store = SourceStore(async_session_factory)
     logger.debug("Seeding sources table if empty")
     await source_store.seed_if_empty(_DEFAULT_SOURCES)
 
-    sources = await source_store.list_active()
+    sources = await source_store.list_all() if include_inactive else await source_store.list_active()
     if not sources:
-        logger.warning("No active sources found in DB — pipeline will idle")
-        return
+        logger.warning("No sources found in DB — pipeline will idle")
+        return []
 
+    configs: list[SourceConfig] = []
     for s in sources:
         logger.debug(
             "Registering source id=%s type=%s interval=%ds url=%s",
@@ -126,7 +154,7 @@ async def _bootstrap_sources(scheduler: Scheduler) -> None:
             s.poll_interval_seconds,
             s.url,
         )
-        scheduler.add_source(
+        configs.append(
             SourceConfig(
                 source_id=s.id,
                 url=s.url,
@@ -135,7 +163,34 @@ async def _bootstrap_sources(scheduler: Scheduler) -> None:
             )
         )
 
-    logger.info("Loaded %d active source(s) from DB", len(sources))
+    label = "configured" if include_inactive else "active"
+    logger.info("Loaded %d %s source(s) from DB", len(configs), label)
+    return configs
+
+
+async def _bootstrap_sources(scheduler: Scheduler) -> None:
+    for source in await _load_source_configs():
+        scheduler.add_source(source)
+
+
+async def _submit_sources_once(dispatcher: Dispatcher, sources: list[SourceConfig]) -> None:
+    for source in sources:
+        task = Task(
+            task_type=TaskType.FETCH_SOURCE,
+            payload={
+                "source_id": str(source.source_id),
+                "url": source.url,
+                "source_type": source.source_type,
+                "reparse_duplicate": True,
+            },
+            trace_id=uuid4(),
+        )
+        logger.info(
+            "Smoke E2E  submitting FETCH_SOURCE  source_id=%s  task_id=%s",
+            source.source_id,
+            task.task_id,
+        )
+        await dispatcher.submit(task)
 
 
 async def main() -> None:
@@ -165,15 +220,37 @@ async def main() -> None:
         )
         return
     logger.debug("Database schema ready")
+    await OfficeStore(async_session_factory).seed_if_empty(DEFAULT_OFFICES)
+
+    smoke_profile_override: dict | None = None
+    llm_normalization_enabled = settings.llm_normalization_enabled
+    llm_normalization_max_per_raw = settings.llm_normalization_max_per_raw
+    if args.smoke_e2e:
+        limit = max(0, args.smoke_normalize_limit)
+        smoke_profile_override = {"normalize_enabled": True, "normalize_limit": limit}
+        llm_normalization_enabled = True
+        llm_normalization_max_per_raw = limit
+        logger.warning(
+            "Smoke E2E mode: all configured sources will be polled once; "
+            "LLM normalization forced on; normalize_limit=%d",
+            limit,
+        )
 
     queue = TaskQueue()
     task_store = TaskStore(async_session_factory)
+    stale_tasks = await task_store.fail_incomplete("abandoned by previous pipeline process")
+    if stale_tasks:
+        logger.warning("Marked %d stale pending/running task(s) as failed", stale_tasks)
+
     raw_store = RawStore(async_session_factory)
     source_store = SourceStore(async_session_factory)
     parsed_store = ParsedStore(async_session_factory)
     normalized_store = NormalizedEventStore(async_session_factory)
+    office_store = OfficeStore(async_session_factory)
+    office_impact_store = OfficeImpactStore(async_session_factory)
     logger.debug(
-        "Core objects created: TaskQueue, TaskStore, RawStore, ParsedStore, NormalizedEventStore"
+        "Core objects created: TaskQueue, TaskStore, RawStore, ParsedStore, "
+        "NormalizedEventStore, OfficeStore, OfficeImpactStore"
     )
 
     dispatcher = Dispatcher(queue, task_store)
@@ -186,8 +263,12 @@ async def main() -> None:
         raw_store,
         source_store,
         parsed_store,
-        llm_normalization_enabled=settings.llm_normalization_enabled,
-        llm_normalization_max_per_raw=settings.llm_normalization_max_per_raw,
+        llm_normalization_enabled=llm_normalization_enabled,
+        llm_normalization_max_per_raw=llm_normalization_max_per_raw,
+        parser_profile_override=smoke_profile_override,
+        llm_normalization_max_per_source=(
+            max(0, args.smoke_normalize_limit) if args.smoke_e2e else None
+        ),
     )
     dispatcher.register(TaskType.PARSE_CONTENT, parse_handler.handle)
 
@@ -195,17 +276,40 @@ async def main() -> None:
         parsed_store,
         normalized_store,
         LLMNormalizer(),
+        dispatcher.submit,
     )
     dispatcher.register(TaskType.NORMALIZE_EVENT, normalization_handler.handle)
 
+    office_match_handler = OfficeMatchHandler(
+        normalized_store,
+        office_store,
+        office_impact_store,
+    )
+    dispatcher.register(TaskType.MATCH_OFFICES, office_match_handler.handle)
+
     logger.debug(
-        "Dispatcher created; handlers registered for FETCH_SOURCE, PARSE_CONTENT, NORMALIZE_EVENT"
+        "Dispatcher created; handlers registered for FETCH_SOURCE, PARSE_CONTENT, "
+        "NORMALIZE_EVENT, MATCH_OFFICES"
     )
 
     scheduler = Scheduler(dispatcher.submit)
-    await _bootstrap_sources(scheduler)
+    if args.smoke_e2e:
+        sources = await _load_source_configs(include_inactive=True)
+        if not sources:
+            return
+        runner = asyncio.create_task(dispatcher.run())
+        try:
+            await _submit_sources_once(dispatcher, sources)
+            await dispatcher.join()
+        finally:
+            runner.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await runner
+        logger.info("Smoke E2E complete — queue drained")
+        return
 
     logger.info("Pipeline ready — starting scheduler and dispatcher")
+    await _bootstrap_sources(scheduler)
     await asyncio.gather(scheduler.run(), dispatcher.run())
 
 

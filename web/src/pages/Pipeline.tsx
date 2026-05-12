@@ -3,7 +3,8 @@ import { api } from "@/lib/api";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { PipelineFlow } from "@/components/pipeline/PipelineFlow";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Badge, StatusBadge, statusTone } from "@/components/ui/Badge";
+import { Badge, StatusBadge } from "@/components/ui/Badge";
+import { statusTone } from "@/components/ui/statusTone";
 import { fmtNumber, fmtRelative } from "@/lib/format";
 
 export function Pipeline() {

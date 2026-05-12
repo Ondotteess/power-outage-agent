@@ -139,10 +139,20 @@ LIMIT 20;
 SELECT COUNT(*) FROM raw_records;
 SELECT COUNT(*) FROM parsed_records;
 SELECT COUNT(*) FROM normalized_events;
+SELECT COUNT(*) FROM offices;
+SELECT COUNT(*) FROM office_impacts;
 SELECT task_type, status, COUNT(*)
 FROM tasks
 GROUP BY task_type, status
 ORDER BY task_type, status;
+
+-- Office matcher output
+SELECT o.name, o.city, o.address, i.impact_level, i.match_strategy, i.match_score,
+       i.impact_start, i.impact_end
+FROM office_impacts i
+JOIN offices o ON o.id = i.office_id
+ORDER BY i.detected_at DESC
+LIMIT 20;
 
 -- Очистить хвост LLM-задач после неудачного тестового запуска
 DELETE FROM tasks WHERE task_type = 'normalize_event';
@@ -222,6 +232,30 @@ PY
 ```
 
 Cold-start: первый OAuth-запрос после старта процесса может изредка падать с `httpx.ConnectError` — повторный пройдёт. На прод-нагрузку — рассмотри retry на `ConnectError` в `gigachat_client.py`.
+
+## Smoke E2E: по 5 LLM-записей из каждого источника
+
+Сценарий для проверки всего текущего pipeline без ожидания расписания:
+
+- берёт все источники из таблицы `sources`, включая неактивные;
+- делает один `FETCH_SOURCE` на каждый источник;
+- если raw уже был сохранён раньше, всё равно ставит его на повторный parse;
+- включает LLM-нормализацию независимо от глобального флага;
+- отправляет в LLM не больше 5 parsed-записей на источник;
+- ждёт drain очереди и завершает процесс.
+
+```bash
+docker compose run --rm --volume "${PWD}:/src" --workdir /src app \
+  python -m app.main --log-level INFO --smoke-e2e --smoke-normalize-limit 5
+```
+
+Перед запуском нужны GigaChat credentials в `.env.local`:
+
+```env
+LLM_NORMALIZATION_ENABLED=true
+GIGACHAT_AUTH_KEY=<authorization-key>
+GIGACHAT_VERIFY_SSL=false
+```
 
 ## Alembic (миграции)
 

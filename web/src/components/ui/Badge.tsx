@@ -1,6 +1,5 @@
 import { ReactNode } from "react";
-
-export type Tone = "teal" | "green" | "amber" | "red" | "gray" | "blue";
+import { statusTone, type Tone } from "./statusTone";
 
 const TONES: Record<Tone, string> = {
   teal: "bg-accent-teal/10 text-accent-teal border-accent-teal/30",
@@ -48,28 +47,6 @@ export function StatusDot({ tone = "gray", pulse = false }: { tone?: Tone; pulse
       <span className={`relative inline-flex h-2 w-2 rounded-full ${colors[tone]}`} />
     </span>
   );
-}
-
-const STATUS_TONE: Record<string, Tone> = {
-  healthy: "green",
-  running: "teal",
-  pending: "gray",
-  failed: "red",
-  warning: "amber",
-  degraded: "amber",
-  inactive: "gray",
-  done: "green",
-  success: "green",
-  info: "blue",
-  error: "red",
-  neutral: "gray",
-  sent: "green",
-  queued: "amber",
-  unknown: "gray",
-};
-
-export function statusTone(status: string): Tone {
-  return STATUS_TONE[status] ?? "gray";
 }
 
 export function StatusBadge({ status }: { status: string }) {

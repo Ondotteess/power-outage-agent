@@ -14,4 +14,5 @@ data/processed/*
 .ruff_cache
 .pytest_cache
 .coverage
+*.tsbuildinfo
 samples

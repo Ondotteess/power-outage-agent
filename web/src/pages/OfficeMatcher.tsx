@@ -24,6 +24,7 @@ export function OfficeMatcher() {
     { key: "start", header: "Impact start", cell: (r) => <span className="font-mono text-xs">{fmtDate(r.impact_start)}</span> },
     { key: "lvl", header: "Level", cell: (r) => <StatusBadge status={r.impact_level === "high" ? "failed" : r.impact_level === "medium" ? "warning" : "info"} /> },
     { key: "strat", header: "Strategy", cell: (r) => <Badge tone="blue">{r.match_strategy}</Badge> },
+    { key: "score", header: "Score", cell: (r) => <span className="font-mono text-xs">{r.match_score ? r.match_score.toFixed(2) : "-"}</span> },
     { key: "det", header: "Detected", cell: (r) => <span className="text-xs">{fmtRelative(r.detected_at)}</span> },
   ];
 
@@ -31,15 +32,15 @@ export function OfficeMatcher() {
     <div className="space-y-6">
       <PageHeader
         title="Office matcher"
-        description="Maps normalized outage events to known office addresses. Registry is mock — replaced on Week 3."
-        actions={<Badge tone="amber"><Building2 size={12} /> mock registry</Badge>}
+        description="Maps normalized outage events to known office addresses."
+        actions={<Badge tone="green"><Building2 size={12} /> live matcher</Badge>}
       />
       <Card>
-        <CardHeader title="Impacts" subtitle="Detected next-24h overlaps" />
+        <CardHeader title="Impacts" subtitle="Detected active/future overlaps" />
         <DataTable columns={impactCols} rows={impacts.data} isLoading={impacts.isLoading} error={impacts.error} rowKey={(r) => r.id} />
       </Card>
       <Card>
-        <CardHeader title="Office registry" subtitle="Mock data — Кемеровская обл." />
+        <CardHeader title="Office registry" subtitle="Active backend registry" />
         <DataTable columns={officeCols} rows={offices.data} isLoading={offices.isLoading} error={offices.error} rowKey={(r) => r.id} />
       </Card>
     </div>

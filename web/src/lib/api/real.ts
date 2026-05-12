@@ -1,11 +1,11 @@
 /**
  * Real backend client — talks to FastAPI at /api/*.
- * Endpoints not yet on the backend (offices, notifications, logs) fall back
+ * Endpoints not yet on the backend (notifications, logs) fall back
  * to mock data so the UI keeps working.
  */
 import type { ApiClient } from "./client";
 import { mockHelpers } from "./mock";
-import type { ListParams } from "./types";
+import type { ListParams, Office, OfficeImpact } from "./types";
 
 const BASE = "/api";
 
@@ -50,12 +50,8 @@ export const realClient: ApiClient = {
   retryTask: (id) => post(`/tasks/${id}/retry`),
 
   // Not on backend yet — keep using mock so the UI keeps working.
-  async listOffices() {
-    return mockHelpers.OFFICES;
-  },
-  async listOfficeImpacts() {
-    return mockHelpers.OFFICE_IMPACTS;
-  },
+  listOffices: () => get<Office[]>("/offices"),
+  listOfficeImpacts: () => get<OfficeImpact[]>("/office-impacts"),
   async listNotifications() {
     return mockHelpers.NOTIFICATIONS;
   },

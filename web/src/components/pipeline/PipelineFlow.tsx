@@ -1,6 +1,7 @@
 import { ChevronRight, Loader2 } from "lucide-react";
 import type { PipelineStage } from "@/lib/api/types";
-import { StatusDot, statusTone } from "@/components/ui/Badge";
+import { StatusDot } from "@/components/ui/Badge";
+import { statusTone } from "@/components/ui/statusTone";
 import { fmtNumber } from "@/lib/format";
 
 function StageCard({ s }: { s: PipelineStage }) {

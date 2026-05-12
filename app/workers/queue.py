@@ -67,6 +67,13 @@ class TaskQueue:
     def task_done(self) -> None:
         self._queue.task_done()
 
+    async def join(self) -> None:
+        await self._queue.join()
+
     @property
     def size(self) -> int:
         return self._queue.qsize()
+
+    @property
+    def unfinished_tasks(self) -> int:
+        return self._queue._unfinished_tasks

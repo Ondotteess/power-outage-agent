@@ -102,6 +102,30 @@ async def test_handler_failure_retries_with_zero_backoff():
     assert statuses.count("pending") >= 2
 
 
+async def test_join_waits_for_delayed_retry_to_finish():
+    queue = TaskQueue()
+    store = FakeTaskStore()
+    dispatcher = Dispatcher(queue, store, backoff_base=1, backoff_max=0)
+    attempts: list[int] = []
+
+    async def handler(task: Task) -> None:
+        attempts.append(task.attempt)
+        if task.attempt == 0:
+            raise RuntimeError("transient")
+
+    dispatcher.register(TaskType.FETCH_SOURCE, handler)
+
+    task = _make_task()
+    await dispatcher.submit(task)
+
+    runner = asyncio.create_task(dispatcher.run())
+    await dispatcher.join()
+    await _stop(runner)
+
+    assert attempts == [0, 1]
+    assert store.statuses_for(task.task_id)[-1] == "done"
+
+
 async def test_handler_failure_goes_to_dlq_after_max_attempts():
     queue = TaskQueue()
     store = FakeTaskStore()

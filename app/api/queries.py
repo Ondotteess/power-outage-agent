@@ -10,10 +10,30 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import NormalizedEvent, ParsedRecord, RawRecord, Source, TaskRecord
+from app.db.models import (
+    NormalizedEvent,
+    Office,
+    OfficeImpact,
+    ParsedRecord,
+    RawRecord,
+    Source,
+    TaskRecord,
+)
+
+SYSTEM_ABANDONED_TASK_ERROR = "abandoned by previous pipeline process"
+
+
+def _exclude_system_failures(stmt):
+    return stmt.where(
+        or_(
+            TaskRecord.status != "failed",
+            TaskRecord.error.is_(None),
+            TaskRecord.error != SYSTEM_ABANDONED_TASK_ERROR,
+        )
+    )
 
 
 async def list_sources(session: AsyncSession) -> list[Source]:
@@ -112,6 +132,36 @@ async def list_normalized(
     return list(result.scalars().all())
 
 
+async def list_offices(session: AsyncSession) -> list[Office]:
+    result = await session.execute(select(Office).order_by(Office.name))
+    return list(result.scalars().all())
+
+
+async def list_office_impacts(
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[tuple[OfficeImpact, Office]]:
+    result = await session.execute(
+        select(OfficeImpact, Office)
+        .join(Office, Office.id == OfficeImpact.office_id)
+        .order_by(desc(OfficeImpact.detected_at))
+        .limit(limit)
+        .offset(offset)
+    )
+    return [(impact, office) for impact, office in result.all()]
+
+
+async def count_active_office_impacts(session: AsyncSession, now: datetime) -> int:
+    result = await session.execute(
+        select(func.count(distinct(OfficeImpact.office_id))).where(
+            or_(OfficeImpact.impact_end.is_(None), OfficeImpact.impact_end >= now)
+        )
+    )
+    return result.scalar() or 0
+
+
 async def confidence_distribution(session: AsyncSession) -> dict[str, int]:
     """Return counts of normalized events bucketed by confidence."""
     result = await session.execute(select(NormalizedEvent.confidence))
@@ -128,27 +178,32 @@ async def list_tasks(
     status: str | None = None,
     limit: int = 100,
     offset: int = 0,
+    include_system_failures: bool = False,
 ) -> list[TaskRecord]:
     stmt = select(TaskRecord).order_by(desc(TaskRecord.updated_at)).limit(limit).offset(offset)
     if status:
         stmt = stmt.where(TaskRecord.status == status)
+    if not include_system_failures:
+        stmt = _exclude_system_failures(stmt)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
 
 async def count_tasks_by_status(session: AsyncSession) -> dict[str, int]:
-    result = await session.execute(
+    stmt = _exclude_system_failures(
         select(TaskRecord.status, func.count(TaskRecord.id)).group_by(TaskRecord.status)
     )
+    result = await session.execute(stmt)
     return {row[0]: row[1] for row in result.all()}
 
 
 async def count_tasks_by_type_status(session: AsyncSession) -> dict[tuple[str, str], int]:
-    result = await session.execute(
+    stmt = _exclude_system_failures(
         select(TaskRecord.task_type, TaskRecord.status, func.count(TaskRecord.id)).group_by(
             TaskRecord.task_type, TaskRecord.status
         )
     )
+    result = await session.execute(stmt)
     return {(row[0], row[1]): row[2] for row in result.all()}
 
 

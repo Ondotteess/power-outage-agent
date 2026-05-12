@@ -42,9 +42,11 @@ export interface ApiClient {
   listTasks(params?: ListParams): Promise<Task[]>;
   retryTask(id: string): Promise<ActionResponse>;
 
-  // Mock-only (no backend yet)
+  // Office matcher
   listOffices(): Promise<Office[]>;
   listOfficeImpacts(): Promise<OfficeImpact[]>;
+
+  // Mock-only (no backend yet)
   listNotifications(): Promise<Notification[]>;
   listLogs(): Promise<LogLine[]>;
 }

@@ -67,13 +67,27 @@ class NormalizedEventSchema(BaseModel):
     confidence: float = 0.0
 
 
+class OfficeSchema(BaseModel):
+    id: UUID
+    name: str
+    city: str
+    address: str
+    region: str
+    is_active: bool = True
+    latitude: float | None = None
+    longitude: float | None = None
+    extra: dict = Field(default_factory=dict)
+
+
 class OfficeImpactSchema(BaseModel):
+    id: UUID
     office_id: UUID
     event_id: UUID
     impact_start: datetime
     impact_end: datetime | None = None
     impact_level: ImpactLevel
     match_strategy: str  # exact_address | geo_radius | feeder
+    match_score: float = 0.0
     detected_at: datetime
 
 

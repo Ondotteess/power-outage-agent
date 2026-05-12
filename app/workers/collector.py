@@ -61,6 +61,7 @@ class CollectorHandler:
         url = task.payload["url"]
         source_id_str = task.payload.get("source_id")
         source_id = UUID(source_id_str) if source_id_str else None
+        reparse_duplicate = bool(task.payload.get("reparse_duplicate", False))
 
         parser_profile = await self._load_parser_profile(source_id)
         urls = self._build_urls(url, parser_profile)
@@ -86,7 +87,14 @@ class CollectorHandler:
 
         verify_ssl = bool(parser_profile.get("verify_ssl", True))
         for page_url in urls:
-            await self._fetch_and_persist(collector, page_url, source_id, task, verify_ssl)
+            await self._fetch_and_persist(
+                collector,
+                page_url,
+                source_id,
+                task,
+                verify_ssl,
+                reparse_duplicate=reparse_duplicate,
+            )
 
     async def _load_parser_profile(self, source_id: UUID | None) -> dict:
         if source_id is None or self._source_store is None:
@@ -141,6 +149,8 @@ class CollectorHandler:
         source_id: UUID | None,
         task: Task,
         verify_ssl: bool = True,
+        *,
+        reparse_duplicate: bool = False,
     ) -> None:
         raw = await collector.fetch(url=url, trace_id=task.trace_id, verify_ssl=verify_ssl)
         logger.info(
@@ -158,6 +168,15 @@ class CollectorHandler:
                 url,
                 task.trace_id,
             )
+            if reparse_duplicate:
+                existing_raw_id = await self._raw_store.get_id_by_hash(raw.content_hash)
+                if existing_raw_id is not None:
+                    logger.info(
+                        "Collector  duplicate reparse requested  raw_id=%s  trace=%s",
+                        existing_raw_id,
+                        task.trace_id,
+                    )
+                    await self._submit_parse(existing_raw_id, task.trace_id)
             return
 
         await self._raw_store.save(raw, source_id=source_id)
@@ -169,16 +188,19 @@ class CollectorHandler:
             task.trace_id,
         )
 
+        await self._submit_parse(raw.id, task.trace_id)
+
+    async def _submit_parse(self, raw_id: UUID, trace_id: UUID) -> None:
         parse_task = Task(
             task_type=TaskType.PARSE_CONTENT,
-            payload={"raw_record_id": str(raw.id)},
-            trace_id=task.trace_id,
+            payload={"raw_record_id": str(raw_id)},
+            trace_id=trace_id,
         )
         logger.debug(
             "Collector  enqueue PARSE_CONTENT  parse_task_id=%s  raw_id=%s  trace=%s",
             parse_task.task_id,
-            raw.id,
-            task.trace_id,
+            raw_id,
+            trace_id,
         )
         await self._submit(parse_task)
 

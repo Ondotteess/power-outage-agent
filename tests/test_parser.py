@@ -319,3 +319,59 @@ class TestParseHandler:
 
         assert len(parsed_store.saved[0]) == 3
         assert len(submitted) == 2
+
+    async def test_parser_profile_override_enables_limited_normalization(self):
+        source = FakeSource(parser_profile={"parser": "rosseti_sib", "normalize_enabled": False})
+        raw = FakeRawRecord(
+            source_id=source.id,
+            raw_content=json.dumps(
+                [
+                    _make_item(id="1", date_start=_today_str(1)),
+                    _make_item(id="2", date_start=_today_str(1)),
+                    _make_item(id="3", date_start=_today_str(1)),
+                ]
+            ),
+        )
+        handler, submitted, parsed_store = self._make_handler(
+            raw,
+            source,
+            parser_profile_override={"normalize_enabled": True, "normalize_limit": 2},
+        )
+
+        await handler.handle(self._make_task(raw.id))
+
+        assert len(parsed_store.saved[0]) == 3
+        assert len(submitted) == 2
+
+    async def test_per_source_normalization_budget_spans_multiple_raw_records(self):
+        source = FakeSource(parser_profile={"parser": "rosseti_sib"})
+        raw1 = FakeRawRecord(
+            source_id=source.id,
+            raw_content=json.dumps(
+                [
+                    _make_item(id="1", date_start=_today_str(1)),
+                    _make_item(id="2", date_start=_today_str(1)),
+                ]
+            ),
+        )
+        handler, submitted, _parsed_store = self._make_handler(
+            raw1,
+            source,
+            llm_normalization_max_per_source=3,
+        )
+
+        await handler.handle(self._make_task(raw1.id))
+
+        raw2 = FakeRawRecord(
+            source_id=source.id,
+            raw_content=json.dumps(
+                [
+                    _make_item(id="3", date_start=_today_str(1)),
+                    _make_item(id="4", date_start=_today_str(1)),
+                ]
+            ),
+        )
+        handler._raw_store.record = raw2
+        await handler.handle(self._make_task(raw2.id))
+
+        assert len(submitted) == 3
