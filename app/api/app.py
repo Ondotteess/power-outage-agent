@@ -1,0 +1,66 @@
+"""FastAPI admin panel application.
+
+Runs as a separate process from the pipeline worker:
+
+    uvicorn app.api.app:app --reload --port 8000
+
+CORS is open for dev so the Vite dev server (default :5173) can reach the API.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.routers import dashboard, pipeline, records, sources, tasks
+from app.db.engine import init_db
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Idempotent — same create_all the pipeline runs. Lets the admin API
+    # come up even before the pipeline has been started for the first time.
+    try:
+        await init_db()
+        logger.info("Admin API: database schema ready")
+    except OSError as exc:
+        logger.error("Admin API: cannot reach database: %s", exc)
+    yield
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="Power Outage Agent — Admin API",
+        version="0.1.0",
+        description="Read-only admin/observability API for the outage pipeline.",
+        lifespan=_lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.include_router(dashboard.router)
+    app.include_router(pipeline.router)
+    app.include_router(sources.router)
+    app.include_router(records.router)
+    app.include_router(tasks.router)
+
+    @app.get("/api/health", tags=["health"])
+    async def health() -> dict:
+        return {"ok": True}
+
+    return app
+
+
+app = create_app()

@@ -2,6 +2,83 @@
 
 Прототип агента, который раз в N часов парсит сайты энергокомпаний, узнаёт о плановых отключениях, сопоставляет с адресами офисов и шлёт уведомление в корпоративные каналы.
 
+## Запуск
+
+### Pipeline (как было)
+
+```bash
+docker compose up db -d
+python -m app.main
+```
+
+### Admin API (FastAPI)
+
+```bash
+pip install -e .[web]
+uvicorn app.api.app:app --reload --port 8000
+# http://localhost:8000/docs — OpenAPI
+```
+
+### Web admin panel (Vite + React)
+
+```bash
+cd web
+npm install
+npm run dev
+# http://localhost:5173
+```
+
+Фронт по умолчанию использует **mock-данные** (`VITE_USE_MOCK=1`). Чтобы переключиться на реальный backend, поднимите Admin API (выше) и создайте `web/.env.local`:
+
+```env
+VITE_USE_MOCK=0
+```
+
+В dev-режиме Vite проксирует `/api/*` на `http://localhost:8000`. Для продакшен-сборки (`npm run build`) выкладывайте `web/dist/` за тем же origin, что и FastAPI, либо настройте reverse proxy.
+
+### Архитектура frontend
+
+```
+web/
+├── src/
+│   ├── lib/api/         # типы + ApiClient + mock + real (переключатель VITE_USE_MOCK)
+│   ├── lib/format.ts    # форматтеры дат/чисел/relative time
+│   ├── components/
+│   │   ├── layout/      # AppShell, Sidebar, Header
+│   │   ├── ui/          # Card, Badge, KpiCard, DataTable, PageHeader, EmptyState
+│   │   ├── pipeline/    # PipelineFlow (горизонтальный flow со статусами стейджей)
+│   │   ├── activity/    # ActivityFeed
+│   │   └── charts/      # QueueBacklogChart, ConfidenceBars (recharts)
+│   ├── pages/           # Dashboard + 14 разделов
+│   └── styles/index.css # Tailwind layer + кастомные классы (.card, .btn, .data-table)
+└── ...
+```
+
+Стек: **Vite + React 18 + TypeScript + Tailwind + react-router-dom + @tanstack/react-query + recharts + lucide-react**. Сервер-состояние идёт через React Query, доменные типы — в `lib/api/types.ts` и зеркалят `app/api/schemas.py`.
+
+### Что mock vs реальный backend
+
+| Раздел | Источник |
+| --- | --- |
+| Dashboard summary / KPI | реальный (`/api/dashboard/summary`) |
+| Pipeline status | реальный (`/api/pipeline/status`) |
+| Sources / Raw / Parsed / Normalized / Tasks / DLQ | реальный (`/api/...`) |
+| Activity feed | реальный (синтезируется из RAW+Parsed+Normalized+failed Tasks) |
+| Normalization quality | реальный (`/api/dashboard/normalization-quality`) |
+| Queue backlog 24h | **mock** (нет персистентности глубины очереди) |
+| Office matcher / Office impacts | **mock** (Week 3) |
+| Notifications | **mock** (Week 4) |
+| Logs tail | **mock** (логи не агрегируются в БД) |
+| Action `Run poll now` / `Retry` | **stub** на бекенде (202 + сообщение; нужен IPC между admin API и pipeline-процессом) |
+
+### Желательные следующие backend-эндпоинты
+
+- IPC от admin API к pipeline для `POST /api/sources/{id}/poll` и `POST /api/tasks/{id}/retry` (отдельная таблица `poll_requests` / `retry_requests`, которую слушает scheduler).
+- Реальные office registry endpoints (Week 3).
+- Таблица notifications + endpoint.
+- Persistent queue-depth time series (минимально — periodic снапшот в БД).
+- Лог-стрим — например, через journald/loki, либо отдельная таблица `events` со структурированной записью этапов.
+
 
 ## План на 4 недели
 

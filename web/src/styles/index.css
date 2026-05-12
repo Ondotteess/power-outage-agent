@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    font-feature-settings:
+      "cv02" on,
+      "cv03" on,
+      "cv04" on,
+      "cv11" on;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #1f2937;
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: #374151;
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-bg-surface shadow-card;
+  }
+  .card-header {
+    @apply flex items-center justify-between border-b border-line/60 px-4 py-3;
+  }
+  .card-title {
+    @apply text-sm font-medium text-ink;
+  }
+  .card-subtitle {
+    @apply text-xs text-ink-muted;
+  }
+  .card-body {
+    @apply p-4;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-md border border-line bg-bg-elevated px-3 py-1.5 text-sm text-ink transition-colors hover:bg-bg-surface hover:border-line/80 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .btn-primary {
+    @apply border-accent-teal/40 bg-accent-teal/10 text-accent-teal hover:bg-accent-teal/15 hover:border-accent-teal/60;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent hover:bg-bg-elevated;
+  }
+
+  .input {
+    @apply h-9 rounded-md border border-line bg-bg-elevated px-3 text-sm text-ink placeholder:text-ink-dim focus:outline-none focus:ring-1 focus:ring-accent-teal/40 focus:border-accent-teal/40;
+  }
+
+  .table-wrap {
+    @apply overflow-x-auto;
+  }
+  .data-table {
+    @apply w-full text-left text-sm;
+  }
+  .data-table thead th {
+    @apply sticky top-0 z-10 bg-bg-surface/90 px-4 py-2.5 text-2xs font-medium uppercase tracking-wider text-ink-muted backdrop-blur;
+  }
+  .data-table tbody td {
+    @apply border-t border-line/60 px-4 py-2.5 align-middle text-ink;
+  }
+  .data-table tbody tr:hover td {
+    @apply bg-bg-elevated/40;
+  }
+}
