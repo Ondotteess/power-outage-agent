@@ -14,6 +14,7 @@ from sqlalchemy import and_, desc, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    DedupEvent,
     NormalizedEvent,
     Notification,
     Office,
@@ -194,8 +195,16 @@ async def list_notifications(
 async def count_active_office_impacts(session: AsyncSession, now: datetime) -> int:
     result = await session.execute(
         select(func.count(distinct(OfficeImpact.office_id))).where(
-            or_(OfficeImpact.impact_end.is_(None), OfficeImpact.impact_end >= now)
+            OfficeImpact.impact_start <= now,
+            or_(OfficeImpact.impact_end.is_(None), OfficeImpact.impact_end >= now),
         )
+    )
+    return result.scalar() or 0
+
+
+async def count_dedup_events_since(session: AsyncSession, since: datetime) -> int:
+    result = await session.execute(
+        select(func.count(DedupEvent.id)).where(DedupEvent.created_at >= since)
     )
     return result.scalar() or 0
 
@@ -225,6 +234,11 @@ async def list_tasks(
         stmt = _exclude_system_failures(stmt)
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def get_task(session: AsyncSession, task_id: UUID) -> TaskRecord | None:
+    result = await session.execute(select(TaskRecord).where(TaskRecord.id == task_id))
+    return result.scalar_one_or_none()
 
 
 async def count_tasks_by_status(session: AsyncSession) -> dict[str, int]:

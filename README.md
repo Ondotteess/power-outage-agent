@@ -42,9 +42,10 @@ docker compose --profile demo up --build db api web demo-runner
 ```bash
 docker compose --profile demo up --build -d db api web
 docker compose --profile demo run --rm demo-runner
+docker compose exec -T api python -m app.tools.smoke_check --expected-offices 50 --min-active-risk-offices 10 --min-impacts 10 --min-notifications 10
 ```
 
-Demo-runner берёт по 5 локальных demo-записей на каждый активный источник и прогоняет
+Demo-runner пересобирает демо-реестр из 50 офисов по Кемеровской, Новосибирской и Томской областям, берёт по 10 локальных demo-записей на каждый активный источник и прогоняет
 весь pipeline без внешних сайтов и LLM-ключей:
 
 ```text
@@ -53,6 +54,15 @@ FETCH_SOURCE → PARSE_CONTENT → NORMALIZE_EVENT → DEDUPLICATE_EVENT → MAT
 
 В UI переключатель уже задан через `VITE_USE_MOCK=0`, поэтому dashboard, pipeline,
 office impacts и notifications читаются из FastAPI.
+
+Для интерактивных действий UI (`Run poll now`, `Retry`) нужен долгоживущий pipeline-worker:
+
+```bash
+docker compose --profile demo up --build -d db app api web
+```
+
+Admin API пишет заявки в `poll_requests` / `retry_requests`, а `app`-процесс забирает их
+через `RequestWatcher` и ставит реальные задачи в очередь.
 
 Фронт по умолчанию использует **mock-данные** (`VITE_USE_MOCK=1`). Чтобы переключиться на реальный backend, поднимите Admin API (выше) и создайте `web/.env.local`:
 
@@ -119,13 +129,11 @@ web/
 | Office threat map | реальный (`/api/map/offices`) |
 | Notifications | реальный (`/api/notifications`) |
 | Logs tail | **mock** (логи не агрегируются в БД) |
-| Action `Run poll now` / `Retry` | **stub** на бекенде (202 + сообщение; нужен IPC между admin API и pipeline-процессом) |
+| Action `Run poll now` / `Retry` | реальный DB-backed IPC: API пишет request, pipeline-worker enqueue-ит задачу |
 
 ### Желательные следующие backend-эндпоинты
 
-- IPC от admin API к pipeline для `POST /api/sources/{id}/poll` и `POST /api/tasks/{id}/retry` (отдельная таблица `poll_requests` / `retry_requests`, которую слушает scheduler).
 - Реальные office registry endpoints (Week 3).
-- Таблица notifications + endpoint.
 - Persistent queue-depth time series (минимально — periodic снапшот в БД).
 - Лог-стрим — например, через journald/loki, либо отдельная таблица `events` со структурированной записью этапов.
 

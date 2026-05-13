@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import (
+    DedupEvent,
     NormalizedEvent,
     Notification,
     Office,
     OfficeImpact,
     ParsedRecord,
+    PollRequest,
     RawRecord,
+    RetryRequest,
     Source,
     TaskRecord,
 )
@@ -76,6 +79,12 @@ class TaskStore:
             )
             await session.commit()
         return result.rowcount or 0
+
+    async def get_by_id(self, task_id: UUID) -> TaskRecord | None:
+        logger.debug("TaskStore  get_by_id  task_id=%s", task_id)
+        async with self._sf() as session:
+            result = await session.execute(select(TaskRecord).where(TaskRecord.id == task_id))
+            return result.scalar_one_or_none()
 
 
 class RawStore:
@@ -213,7 +222,16 @@ class NormalizedEventStore:
             sources = _event_source_strings(event)
             existing = await _find_existing_normalized_event(session, event)
             if existing is not None:
+                strategy = _dedup_strategy(existing, event)
                 _merge_normalized_event(existing, event, trace_id, sources)
+                session.add(
+                    DedupEvent(
+                        incoming_event_id=event.event_id,
+                        existing_event_id=existing.event_id,
+                        strategy=strategy,
+                        trace_id=trace_id,
+                    )
+                )
                 await session.commit()
                 logger.info(
                     "NormalizedEventStore  dedup merged  incoming_event_id=%s  existing_event_id=%s",
@@ -266,6 +284,17 @@ class OfficeStore:
                 session.add(Office(**payload))
             await session.commit()
         logger.info("OfficeStore  seeded %d office(s)", len(defaults))
+
+    async def replace_all(self, defaults: list[dict]) -> None:
+        logger.warning("OfficeStore  replacing office registry  defaults=%d", len(defaults))
+        async with self._sf() as session:
+            await session.execute(delete(Notification))
+            await session.execute(delete(OfficeImpact))
+            await session.execute(delete(Office))
+            for payload in defaults:
+                session.add(Office(**payload))
+            await session.commit()
+        logger.info("OfficeStore  replaced office registry with %d office(s)", len(defaults))
 
 
 class OfficeImpactStore:
@@ -375,6 +404,146 @@ class NotificationStore:
             return notification.notification_id
 
 
+class PollRequestStore:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def create(self, source_id: UUID, *, trace_id: UUID | None = None) -> UUID:
+        request_id = uuid4()
+        request = PollRequest(id=request_id, source_id=source_id, trace_id=trace_id or request_id)
+        async with self._sf() as session:
+            session.add(request)
+            await session.commit()
+        logger.info("PollRequestStore  created  request_id=%s source_id=%s", request.id, source_id)
+        return request.id
+
+    async def claim_pending(self, *, limit: int = 20) -> list[PollRequest]:
+        async with self._sf() as session:
+            result = await session.execute(
+                select(PollRequest)
+                .where(PollRequest.status == "pending")
+                .order_by(PollRequest.created_at)
+                .limit(limit)
+            )
+            requests = list(result.scalars().all())
+            if not requests:
+                return []
+            now = datetime.now(UTC)
+            for request in requests:
+                request.status = "processing"
+                request.updated_at = now
+            await session.commit()
+        return requests
+
+    async def mark_done(self, request_id: UUID, *, task_id: UUID) -> None:
+        await self._mark(request_id, status="done", task_id=task_id)
+
+    async def mark_failed(self, request_id: UUID, *, error: str) -> None:
+        await self._mark(request_id, status="failed", error=error)
+
+    async def fail_incomplete(self, reason: str) -> int:
+        async with self._sf() as session:
+            result = await session.execute(
+                update(PollRequest)
+                .where(PollRequest.status == "processing")
+                .values(status="failed", error=reason, updated_at=datetime.now(UTC))
+            )
+            await session.commit()
+        return result.rowcount or 0
+
+    async def _mark(
+        self,
+        request_id: UUID,
+        *,
+        status: str,
+        task_id: UUID | None = None,
+        error: str | None = None,
+    ) -> None:
+        values = {
+            "status": status,
+            "error": error,
+            "updated_at": datetime.now(UTC),
+            "processed_at": datetime.now(UTC),
+        }
+        if task_id is not None:
+            values["task_id"] = task_id
+        async with self._sf() as session:
+            await session.execute(
+                update(PollRequest).where(PollRequest.id == request_id).values(**values)
+            )
+            await session.commit()
+
+
+class RetryRequestStore:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def create(self, task_id: UUID, *, trace_id: UUID | None = None) -> UUID:
+        request_id = uuid4()
+        request = RetryRequest(id=request_id, task_id=task_id, trace_id=trace_id or request_id)
+        async with self._sf() as session:
+            session.add(request)
+            await session.commit()
+        logger.info("RetryRequestStore  created  request_id=%s task_id=%s", request.id, task_id)
+        return request.id
+
+    async def claim_pending(self, *, limit: int = 20) -> list[RetryRequest]:
+        async with self._sf() as session:
+            result = await session.execute(
+                select(RetryRequest)
+                .where(RetryRequest.status == "pending")
+                .order_by(RetryRequest.created_at)
+                .limit(limit)
+            )
+            requests = list(result.scalars().all())
+            if not requests:
+                return []
+            now = datetime.now(UTC)
+            for request in requests:
+                request.status = "processing"
+                request.updated_at = now
+            await session.commit()
+        return requests
+
+    async def mark_done(self, request_id: UUID, *, new_task_id: UUID) -> None:
+        await self._mark(request_id, status="done", new_task_id=new_task_id)
+
+    async def mark_failed(self, request_id: UUID, *, error: str) -> None:
+        await self._mark(request_id, status="failed", error=error)
+
+    async def fail_incomplete(self, reason: str) -> int:
+        async with self._sf() as session:
+            result = await session.execute(
+                update(RetryRequest)
+                .where(RetryRequest.status == "processing")
+                .values(status="failed", error=reason, updated_at=datetime.now(UTC))
+            )
+            await session.commit()
+        return result.rowcount or 0
+
+    async def _mark(
+        self,
+        request_id: UUID,
+        *,
+        status: str,
+        new_task_id: UUID | None = None,
+        error: str | None = None,
+    ) -> None:
+        values = {
+            "status": status,
+            "error": error,
+            "updated_at": datetime.now(UTC),
+            "processed_at": datetime.now(UTC),
+        }
+        if new_task_id is not None:
+            values["new_task_id"] = new_task_id
+        async with self._sf() as session:
+            await session.execute(
+                update(RetryRequest).where(RetryRequest.id == request_id).values(**values)
+            )
+            await session.commit()
+
+
 async def _find_existing_normalized_event(
     session: AsyncSession,
     event: NormalizedEventSchema,
@@ -430,6 +599,22 @@ def _new_normalized_event(
         confidence=event.confidence,
         trace_id=trace_id,
     )
+
+
+def _dedup_strategy(existing: NormalizedEvent, event: NormalizedEventSchema) -> str:
+    if event.parsed_record_id is not None and existing.parsed_record_id == event.parsed_record_id:
+        return "parsed_record"
+    if (
+        existing.event_type == str(event.event_type)
+        and existing.start_time == event.start_time
+        and existing.end_time == event.end_time
+        and (
+            existing.location_normalized == event.location.normalized
+            or existing.location_raw == event.location.raw
+        )
+    ):
+        return "exact_window"
+    return "composite"
 
 
 def _merge_normalized_event(

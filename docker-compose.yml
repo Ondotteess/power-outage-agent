@@ -82,7 +82,7 @@ services:
         "app.main",
         "--demo-e2e",
         "--demo-records-per-source",
-        "5",
+        "10",
         "--demo-step-delay",
         "0.75",
         "--log-level",

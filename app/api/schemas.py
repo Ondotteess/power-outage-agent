@@ -222,3 +222,4 @@ class ActionResponse(BaseModel):
     ok: bool
     message: str
     task_id: UUID | None = None
+    request_id: UUID | None = None

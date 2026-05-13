@@ -90,14 +90,16 @@ function popupHtml(office: MapOffice): string {
   `;
 }
 
-function OfficeLeafletMap({
+export function OfficeLeafletMap({
   offices,
   selectedOfficeId,
   onSelect,
+  className = "h-[calc(100vh-220px)] min-h-[520px]",
 }: {
   offices: MapOffice[];
   selectedOfficeId: string | null;
   onSelect: (id: string) => void;
+  className?: string;
 }) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -180,7 +182,7 @@ function OfficeLeafletMap({
   }, [coordinateOffices, onSelect, selectedOfficeId]);
 
   return (
-    <div className="office-map relative h-[calc(100vh-220px)] min-h-[520px] overflow-hidden rounded-lg border border-line bg-bg-subtle">
+    <div className={`office-map relative overflow-hidden rounded-lg border border-line bg-bg-subtle ${className}`}>
       <div ref={elementRef} className="h-full w-full" />
       {offices.length === 0 && (
         <div className="absolute inset-0 grid place-items-center bg-bg-subtle/90">

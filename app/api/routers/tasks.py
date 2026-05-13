@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from app.api import queries
 from app.api.deps import SessionDep
 from app.api.schemas import ActionResponse, TaskOut
+from app.db.engine import async_session_factory
+from app.db.repositories import RetryRequestStore
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -38,16 +40,21 @@ async def list_tasks(
 
 
 @router.post("/{task_id}/retry", response_model=ActionResponse, status_code=202)
-async def retry_task(task_id: UUID) -> ActionResponse:
+async def retry_task(task_id: UUID, session: SessionDep) -> ActionResponse:
     """Retry a failed task.
 
-    Stub for now — admin API runs in a separate process from the pipeline worker,
-    so we don't directly enqueue. Returning 202 with a confirmation message keeps
-    the UI flow working until we add an IPC channel (or a `retry_requests` table
-    the dispatcher polls).
+    The API writes a DB-backed retry request. The pipeline's RequestWatcher
+    claims it and re-enqueues the failed task in the worker process.
     """
+    task = await queries.get_task(session, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    if task.status != "failed":
+        raise HTTPException(status_code=409, detail="task is not failed")
+    request_id = await RetryRequestStore(async_session_factory).create(task_id)
     return ActionResponse(
         ok=True,
-        message="Retry scheduled",
-        task_id=task_id,
+        message="Retry request queued",
+        task_id=None,
+        request_id=request_id,
     )

@@ -9,6 +9,11 @@ Power Outage Agent — минимальный event-driven pipeline без вн�
 ```mermaid
 flowchart LR
     Scheduler -->|FETCH_SOURCE| Dispatcher
+    AdminAPI[FastAPI Admin API] --> PollRequests[(poll_requests)]
+    AdminAPI --> RetryRequests[(retry_requests)]
+    PollRequests --> RequestWatcher
+    RetryRequests --> RequestWatcher
+    RequestWatcher --> Dispatcher
     Dispatcher --> CollectorHandler
     CollectorHandler --> RawStore[(raw_records)]
     CollectorHandler -->|PARSE_CONTENT| Dispatcher
@@ -18,6 +23,7 @@ flowchart LR
     Dispatcher --> NormalizationHandler
     NormalizationHandler --> LLMNormalizer
     LLMNormalizer --> NormalizedEventStore[(normalized_events)]
+    NormalizedEventStore --> DedupEventStore[(dedup_events)]
     NormalizationHandler -->|DEDUPLICATE_EVENT| Dispatcher
     Dispatcher --> DeduplicationHandler
     DeduplicationHandler -->|MATCH_OFFICES| Dispatcher
@@ -26,7 +32,7 @@ flowchart LR
     OfficeMatchHandler -->|EMIT_EVENT| Dispatcher
     Dispatcher --> NotificationHandler
     NotificationHandler --> NotificationStore[(notifications)]
-    AdminAPI[FastAPI Admin API] --> OfficeStore[(offices)]
+    AdminAPI --> OfficeStore[(offices)]
     AdminAPI --> OfficeImpactStore
     WebUI[Vite React Admin UI] -->|/api/map/offices| AdminAPI
 ```

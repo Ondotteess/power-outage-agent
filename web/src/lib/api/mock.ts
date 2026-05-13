@@ -394,7 +394,12 @@ export const mockClient: ApiClient = {
       },
       duplicates_skipped: { value: 17, delta_pct: -8.0, delta_label: "-8% vs prev 24h", status: "neutral" },
       failed_tasks: { value: TASKS.filter((t) => t.status === "failed").length, delta_pct: null, delta_label: "DLQ", status: "error" },
-      offices_at_risk: { value: OFFICE_IMPACTS.length, delta_pct: null, delta_label: "next 24h", status: "warning" },
+      offices_at_risk: {
+        value: MAP_OFFICES.filter((office) => office.status !== "ok").length,
+        delta_pct: null,
+        delta_label: "active now",
+        status: "warning",
+      },
     };
   },
   async getPipelineStatus() {

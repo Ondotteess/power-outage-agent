@@ -149,6 +149,7 @@ export interface ActionResponse {
   ok: boolean;
   message: string;
   task_id: string | null;
+  request_id?: string | null;
 }
 
 // Domain/UI types shared by the real and mock API clients.

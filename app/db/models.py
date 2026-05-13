@@ -113,6 +113,21 @@ class NormalizedEvent(Base):
     normalized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class DedupEvent(Base):
+    __tablename__ = "dedup_events"
+    __table_args__ = (
+        Index("ix_dedup_events_created_at", "created_at"),
+        Index("ix_dedup_events_existing_event_id", "existing_event_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    incoming_event_id: Mapped[UUID] = mapped_column(Uuid)
+    existing_event_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("normalized_events.event_id"))
+    strategy: Mapped[str] = mapped_column(String(64))
+    trace_id: Mapped[UUID] = mapped_column(Uuid)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Office(Base):
     __tablename__ = "offices"
     __table_args__ = (
@@ -186,3 +201,43 @@ class TaskRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
+
+
+class PollRequest(Base):
+    __tablename__ = "poll_requests"
+    __table_args__ = (
+        Index("ix_poll_requests_status_created", "status", "created_at"),
+        Index("ix_poll_requests_source_id", "source_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    source_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("sources.id"))
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    task_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[UUID] = mapped_column(Uuid, default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RetryRequest(Base):
+    __tablename__ = "retry_requests"
+    __table_args__ = (
+        Index("ix_retry_requests_status_created", "status", "created_at"),
+        Index("ix_retry_requests_task_id", "task_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    task_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("tasks.id"))
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    new_task_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[UUID] = mapped_column(Uuid, default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

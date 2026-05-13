@@ -1,214 +1,266 @@
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AlertOctagon,
+  AlertTriangle,
   Building2,
-  Copy,
-  Database,
-  FileSearch,
-  Radio,
+  Clock3,
+  Loader2,
+  MapPinned,
+  RefreshCw,
+  ShieldAlert,
+  Zap,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import type { MapImpactSeverity, MapOffice, MapOfficeStatus } from "@/lib/api/types";
+import { Badge, StatusDot } from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
-import { KpiCard } from "@/components/ui/KpiCard";
-import { DataTable, Column } from "@/components/ui/DataTable";
-import { Badge, StatusBadge } from "@/components/ui/Badge";
-import { statusTone } from "@/components/ui/statusTone";
-import { PipelineFlow } from "@/components/pipeline/PipelineFlow";
-import { ActivityFeed } from "@/components/activity/ActivityFeed";
-import { QueueBacklogChart } from "@/components/charts/QueueBacklogChart";
-import { ConfidenceBars } from "@/components/charts/ConfidenceBars";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { fmtConfidence, fmtDate, fmtInterval, fmtNumber, fmtRelative, truncate } from "@/lib/format";
-import type { ParsedRecord, Source, Task } from "@/lib/api/types";
+import { fmtDate, fmtNumber, fmtRelative } from "@/lib/format";
 
-export function Dashboard() {
-  const summary = useQuery({ queryKey: ["dashboard-summary"], queryFn: () => api.getDashboardSummary() });
-  const pipeline = useQuery({ queryKey: ["pipeline-status"], queryFn: () => api.getPipelineStatus(), refetchInterval: 30_000 });
-  const activity = useQuery({ queryKey: ["activity"], queryFn: () => api.getActivity(30), refetchInterval: 30_000 });
-  const sources = useQuery({ queryKey: ["sources"], queryFn: () => api.listSources() });
-  const parsed = useQuery({ queryKey: ["parsed", { limit: 10 }], queryFn: () => api.listParsed({ limit: 10 }) });
-  const dlq = useQuery({ queryKey: ["tasks", "failed", { limit: 5 }], queryFn: () => api.listTasks({ status: "failed", limit: 5 }) });
-  const quality = useQuery({ queryKey: ["quality"], queryFn: () => api.getNormalizationQuality() });
-  const backlog = useQuery({ queryKey: ["backlog"], queryFn: () => api.getQueueBacklog() });
+const EMPTY_OFFICES: MapOffice[] = [];
+const OfficeLeafletMap = lazy(async () => {
+  const module = await import("@/pages/OfficeMap");
+  return { default: module.OfficeLeafletMap };
+});
 
-  const sourceCols: Column<Source>[] = [
-    { key: "name", header: "Source", cell: (r) => <span className="text-ink">{r.name}</span> },
-    { key: "type", header: "Type", cell: (r) => <Badge tone="blue">{r.source_type}</Badge> },
-    { key: "region", header: "Region", cell: (r) => <span className="text-ink-muted">{r.region ?? "—"}</span> },
-    { key: "interval", header: "Poll", cell: (r) => <span className="font-mono text-xs text-ink-muted">{fmtInterval(r.poll_interval_seconds)}</span> },
-    { key: "last", header: "Last fetch", cell: (r) => <span className="text-xs text-ink-muted" title={r.last_fetch ?? ""}>{fmtRelative(r.last_fetch)}</span> },
-    { key: "win", header: "Records 24h", cell: (r) => <span className="font-mono">{fmtNumber(r.records_in_window)}</span> },
-    { key: "ok", header: "Success", cell: (r) => (r.success_rate == null ? "—" : `${(r.success_rate * 100).toFixed(0)}%`) },
-    { key: "status", header: "Status", cell: (r) => <StatusBadge status={r.status} /> },
-  ];
+const STATUS_TONE: Record<MapOfficeStatus, "green" | "amber" | "red"> = {
+  ok: "green",
+  risk: "amber",
+  critical: "red",
+};
 
-  const parsedCols: Column<ParsedRecord>[] = [
-    { key: "date", header: "Date", cell: (r) => <span className="font-mono text-xs">{fmtDate(r.start_time).split(",")[0]}</span> },
-    { key: "time", header: "Time", cell: (r) => <span className="font-mono text-xs">{fmtDate(r.start_time).split(",")[1]?.trim()}</span> },
-    { key: "city", header: "City", cell: (r) => r.city ?? "—" },
-    { key: "addr", header: "Address", cell: (r) => <span className="text-ink-muted">{truncate(r.street, 38)}</span> },
-    { key: "reason", header: "Reason", cell: (r) => <span className="text-ink-muted">{truncate(r.reason, 32)}</span> },
-  ];
+const SEVERITY_TONE: Record<MapImpactSeverity, "gray" | "amber" | "red"> = {
+  unknown: "gray",
+  low: "amber",
+  medium: "amber",
+  high: "red",
+  critical: "red",
+};
 
-  const dlqCols: Column<Task>[] = [
-    { key: "time", header: "Time", cell: (r) => <span className="text-xs">{fmtRelative(r.updated_at)}</span> },
-    { key: "type", header: "Task", cell: (r) => <Badge tone="gray">{r.task_type}</Badge> },
-    { key: "err", header: "Error", cell: (r) => <span className="text-xs text-accent-red/90">{truncate(r.error, 60)}</span> },
-    { key: "att", header: "Att.", cell: (r) => <span className="font-mono text-xs">{r.attempt}</span> },
-  ];
+function threatRank(office: MapOffice): number {
+  if (office.status === "critical") return 3;
+  if (office.status === "risk") return 2;
+  return office.active_impacts.length > 0 ? 1 : 0;
+}
+
+function primarySeverity(office: MapOffice): MapImpactSeverity {
+  return office.active_impacts[0]?.severity ?? "unknown";
+}
+
+function ThreatRow({
+  office,
+  selected,
+  onSelect,
+}: {
+  office: MapOffice;
+  selected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const primary = office.active_impacts[0];
+  const severity = primarySeverity(office);
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Operations dashboard"
-        description="Live view of pipeline health, sources, normalization quality and incidents."
-      />
+    <button
+      className={`w-full rounded-md border p-3 text-left transition-colors ${
+        selected
+          ? "border-accent-teal/60 bg-accent-teal/10"
+          : "border-line bg-bg-elevated/40 hover:border-line/80 hover:bg-bg-elevated"
+      }`}
+      onClick={() => onSelect(office.id)}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-ink">{office.name}</div>
+          <div className="mt-1 truncate text-xs text-ink-muted">{office.address}</div>
+        </div>
+        <Badge tone={STATUS_TONE[office.status]}>
+          <StatusDot tone={STATUS_TONE[office.status]} pulse />
+          <span className="uppercase tracking-wider">{office.status}</span>
+        </Badge>
+      </div>
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {summary.data && (
-          <>
-            <KpiCard label="Active sources" data={summary.data.active_sources} icon={<Database size={16} />} />
-            <KpiCard label="Raw records (24h)" data={summary.data.raw_records_today} icon={<Radio size={16} />} />
-            <KpiCard label="Parsed outages" data={summary.data.parsed_outages} icon={<FileSearch size={16} />} />
-            <KpiCard label="Duplicates skipped" data={summary.data.duplicates_skipped} icon={<Copy size={16} />} />
-            <KpiCard label="Failed tasks / DLQ" data={summary.data.failed_tasks} icon={<AlertOctagon size={16} />} />
-            <KpiCard label="Offices at risk" data={summary.data.offices_at_risk} icon={<Building2 size={16} />} />
-          </>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-2xs text-ink-muted">
+        <Badge tone="gray">{office.city}</Badge>
+        <Badge tone="gray">{office.region}</Badge>
+        <Badge tone={SEVERITY_TONE[severity]}>{severity}</Badge>
+        {office.active_impacts.length > 1 && (
+          <Badge tone="amber">+{office.active_impacts.length - 1}</Badge>
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_360px]">
-        <div className="space-y-6">
-          {/* Pipeline */}
-          <Card>
-            <CardHeader
-              title="Pipeline overview"
-              subtitle="Scheduler → Collector → Parser → Normalizer → Dedup → Office Matcher → Notifier"
-              right={
-                pipeline.data && (
-                  <Badge tone={statusTone(pipeline.data.overall)}>
-                    {pipeline.data.overall}
-                  </Badge>
-                )
-              }
+      {primary && (
+        <div className="mt-3 space-y-2 border-t border-line/60 pt-3">
+          <div className="line-clamp-2 text-sm text-ink">{primary.reason ?? "Причина не указана"}</div>
+          <div className="grid grid-cols-1 gap-1 text-xs text-ink-muted">
+            <div className="flex items-center justify-between gap-2">
+              <span>Начало</span>
+              <span className="font-mono text-ink">{fmtDate(primary.starts_at)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span>Окончание</span>
+              <span className="font-mono text-ink">
+                {primary.ends_at ? fmtDate(primary.ends_at) : "не задано"}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+    </button>
+  );
+}
+
+function StatTile({
+  label,
+  value,
+  icon,
+  tone = "gray",
+}: {
+  label: string;
+  value: string;
+  icon: ReactNode;
+  tone?: "gray" | "amber" | "red" | "green" | "blue";
+}) {
+  return (
+    <div className="rounded-md border border-line bg-bg-elevated/50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs text-ink-muted">{label}</div>
+        <Badge tone={tone}>{icon}</Badge>
+      </div>
+      <div className="mt-2 font-mono text-xl font-semibold text-ink">{value}</div>
+    </div>
+  );
+}
+
+export function Dashboard() {
+  const [selectedOfficeId, setSelectedOfficeId] = useState<string | null>(null);
+  const mapQuery = useQuery({
+    queryKey: ["map-offices"],
+    queryFn: () => api.getMapOffices(),
+    refetchInterval: 30_000,
+  });
+
+  const offices = mapQuery.data?.offices ?? EMPTY_OFFICES;
+  const threatenedOffices = useMemo(
+    () =>
+      offices
+        .filter((office) => office.status !== "ok" || office.active_impacts.length > 0)
+        .sort((a, b) => {
+          const rankDelta = threatRank(b) - threatRank(a);
+          if (rankDelta !== 0) return rankDelta;
+          return a.city.localeCompare(b.city) || a.name.localeCompare(b.name);
+        }),
+    [offices],
+  );
+
+  useEffect(() => {
+    if (selectedOfficeId && offices.some((office) => office.id === selectedOfficeId)) return;
+    setSelectedOfficeId(threatenedOffices[0]?.id ?? null);
+  }, [offices, selectedOfficeId, threatenedOffices]);
+
+  const stats = useMemo(() => {
+    const critical = threatenedOffices.filter((office) => office.status === "critical").length;
+    const activeImpacts = threatenedOffices.reduce(
+      (sum, office) => sum + office.active_impacts.length,
+      0,
+    );
+    return { critical, activeImpacts };
+  }, [threatenedOffices]);
+
+  const updatedAt =
+    mapQuery.dataUpdatedAt > 0
+      ? fmtRelative(new Date(mapQuery.dataUpdatedAt).toISOString())
+      : "ожидание данных";
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Карта угроз"
+        description="Офисы компании в Кемеровской, Новосибирской и Томской областях."
+        actions={
+          <button
+            className="btn btn-primary !py-1.5 !text-xs"
+            onClick={() => mapQuery.refetch()}
+            disabled={mapQuery.isFetching}
+          >
+            {mapQuery.isFetching ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            Обновить
+          </button>
+        }
+      />
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile label="Всего офисов" value={fmtNumber(offices.length)} icon={<Building2 size={14} />} tone="blue" />
+        <StatTile
+          label="Под угрозой"
+          value={fmtNumber(threatenedOffices.length)}
+          icon={<ShieldAlert size={14} />}
+          tone={threatenedOffices.length > 0 ? "amber" : "green"}
+        />
+        <StatTile label="Критичных" value={fmtNumber(stats.critical)} icon={<Zap size={14} />} tone="red" />
+        <StatTile label="Активных событий" value={fmtNumber(stats.activeImpacts)} icon={<Clock3 size={14} />} tone="gray" />
+      </div>
+
+      {mapQuery.error ? (
+        <Card>
+          <CardBody>
+            <EmptyState
+              title="Карта недоступна"
+              hint={(mapQuery.error as Error).message}
+              icon={<AlertTriangle size={22} />}
             />
-            <CardBody>
-              {pipeline.data ? (
-                <PipelineFlow stages={pipeline.data.stages} />
+          </CardBody>
+        </Card>
+      ) : mapQuery.isLoading ? (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
+          <div className="h-[calc(100vh-210px)] min-h-[560px] animate-pulse rounded-lg border border-line bg-bg-elevated/60" />
+          <div className="h-[calc(100vh-210px)] min-h-[560px] animate-pulse rounded-lg border border-line bg-bg-elevated/60" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
+          <Suspense
+            fallback={
+              <div className="h-[calc(100vh-210px)] min-h-[560px] animate-pulse rounded-lg border border-line bg-bg-elevated/60" />
+            }
+          >
+            <OfficeLeafletMap
+              offices={offices}
+              selectedOfficeId={selectedOfficeId}
+              onSelect={setSelectedOfficeId}
+              className="h-[calc(100vh-210px)] min-h-[560px]"
+            />
+          </Suspense>
+
+          <Card className="h-[calc(100vh-210px)] min-h-[560px] overflow-hidden">
+            <CardHeader
+              title="Офисы под угрозой"
+              subtitle={`Обновлено ${updatedAt}`}
+              right={<Badge tone={threatenedOffices.length > 0 ? "amber" : "green"}>{threatenedOffices.length}</Badge>}
+            />
+            <CardBody className="h-[calc(100%-64px)] space-y-2 overflow-y-auto">
+              {threatenedOffices.length === 0 ? (
+                <EmptyState
+                  title="Активных угроз нет"
+                  hint="Боковая панель показывает только офисы с текущими событиями."
+                  icon={<MapPinned size={22} />}
+                />
               ) : (
-                <div className="h-24 animate-pulse rounded bg-bg-elevated/60" />
+                threatenedOffices.map((office) => (
+                  <ThreatRow
+                    key={office.id}
+                    office={office}
+                    selected={office.id === selectedOfficeId}
+                    onSelect={setSelectedOfficeId}
+                  />
+                ))
               )}
             </CardBody>
           </Card>
-
-          {/* Sources */}
-          <Card>
-            <CardHeader title="Sources" subtitle="Polling status and recent yield" />
-            <DataTable
-              columns={sourceCols}
-              rows={sources.data}
-              isLoading={sources.isLoading}
-              error={sources.error}
-              rowKey={(r) => r.id}
-              empty="No sources configured"
-            />
-          </Card>
-
-          {/* Parsed events + DLQ side-by-side */}
-          <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
-            <Card>
-              <CardHeader title="Recent outage events" subtitle="Parsed records, newest first" />
-              <DataTable
-                columns={parsedCols}
-                rows={parsed.data}
-                isLoading={parsed.isLoading}
-                error={parsed.error}
-                rowKey={(r) => r.id}
-              />
-            </Card>
-            <Card>
-              <CardHeader
-                title="Recent DLQ"
-                subtitle="Failed tasks"
-                right={dlq.data && <Badge tone="red">{dlq.data.length}</Badge>}
-              />
-              <DataTable
-                columns={dlqCols}
-                rows={dlq.data}
-                isLoading={dlq.isLoading}
-                error={dlq.error}
-                rowKey={(r) => r.id}
-                empty="No failed tasks 🎉"
-              />
-            </Card>
-          </div>
-
-          {/* Normalization quality + queue backlog */}
-          <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
-            <Card>
-              <CardHeader
-                title="LLM normalization quality"
-                subtitle="GigaChat output confidence distribution"
-                right={quality.data && <Badge tone="teal">avg {fmtConfidence(quality.data.average_confidence)}</Badge>}
-              />
-              <CardBody className="space-y-3">
-                {quality.data ? (
-                  <>
-                    <ConfidenceBars high={quality.data.high} medium={quality.data.medium} low={quality.data.low} />
-                    <div className="grid grid-cols-3 gap-3 border-t border-line/60 pt-3 text-xs">
-                      <div>
-                        <div className="text-ink-muted">Normalized</div>
-                        <div className="font-mono text-ink">
-                          {fmtNumber(quality.data.normalized_count)} / {fmtNumber(quality.data.parsed_total)}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-ink-muted">Tokens used</div>
-                        <div className="font-mono text-ink">{fmtNumber(quality.data.estimated_tokens ?? 0)}</div>
-                      </div>
-                      <div>
-                        <div className="text-ink-muted">Est. cost</div>
-                        <div className="font-mono text-ink">
-                          {quality.data.estimated_cost_usd != null ? `$${quality.data.estimated_cost_usd.toFixed(2)}` : "—"}
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="h-40 animate-pulse rounded bg-bg-elevated/60" />
-                )}
-              </CardBody>
-            </Card>
-            <Card>
-              <CardHeader title="Queue backlog (24h)" subtitle="Pending / running / failed" />
-              <CardBody>
-                {backlog.data ? <QueueBacklogChart data={backlog.data} /> : <div className="h-40 animate-pulse rounded bg-bg-elevated/60" />}
-              </CardBody>
-            </Card>
-          </div>
         </div>
+      )}
 
-        {/* Activity column */}
-        <Card className="h-fit xl:sticky xl:top-20">
-          <CardHeader title="Activity" subtitle="Recent pipeline events" />
-          {activity.isLoading ? (
-            <div className="space-y-2 p-4">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <div key={i} className="h-10 animate-pulse rounded bg-bg-elevated/60" />
-              ))}
-            </div>
-          ) : (
-            <div className="max-h-[640px] overflow-y-auto">
-              <ActivityFeed events={activity.data ?? []} />
-            </div>
-          )}
-        </Card>
-      </div>
-
-      <div className="pt-2 text-2xs text-ink-dim">
+      <div className="text-2xs text-ink-dim">
         Data source: <span className="font-mono">{import.meta.env.VITE_USE_MOCK !== "0" ? "mock" : "FastAPI /api"}</span>
-        {summary.dataUpdatedAt > 0 && <> · updated {fmtRelative(new Date(summary.dataUpdatedAt).toISOString())}</>}
       </div>
     </div>
   );

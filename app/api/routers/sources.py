@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 
 from app.api import queries
 from app.api.deps import SessionDep
 from app.api.schemas import ActionResponse, SourceOut
+from app.db.engine import async_session_factory
+from app.db.repositories import PollRequestStore
 
 router = APIRouter(prefix="/api/sources", tags=["sources"])
 
@@ -68,16 +70,18 @@ async def get_source(source_id: UUID, session: SessionDep) -> SourceOut:
 async def poll_source(source_id: UUID, session: SessionDep) -> ActionResponse:
     """Trigger an immediate poll for a source.
 
-    Stub for now — admin API runs in a separate process from the pipeline worker,
-    so we don't have direct access to the in-memory TaskQueue. Returning 202 with
-    a synthetic task id keeps the UI flow intact until we wire an IPC mechanism
-    (e.g. a `polls` table the scheduler watches, or a small Redis pub/sub).
+    The admin API runs in a separate process from the pipeline worker, so this
+    endpoint writes a DB-backed request. The pipeline's RequestWatcher claims it
+    and enqueues the actual FETCH_SOURCE task in its in-memory queue.
     """
     src = await queries.get_source(session, source_id)
     if not src:
         raise HTTPException(status_code=404, detail="source not found")
+    if not src.is_active:
+        raise HTTPException(status_code=409, detail="source is inactive")
+    request_id = await PollRequestStore(async_session_factory).create(source_id)
     return ActionResponse(
         ok=True,
-        message=f"Poll scheduled for {src.name}",
-        task_id=uuid4(),
+        message=f"Poll request queued for {src.name}",
+        request_id=request_id,
     )

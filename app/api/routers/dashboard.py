@@ -49,6 +49,7 @@ async def summary(session: SessionDep) -> DashboardSummary:
     task_counts = await queries.count_tasks_by_status(session)
     failed = task_counts.get("failed", 0)
     offices_at_risk = await queries.count_active_office_impacts(session, datetime.now(UTC))
+    duplicates_skipped = await queries.count_dedup_events_since(session, now_24h)
 
     pct_raw, label_raw, status_raw = _delta(raw_today, raw_prev)
     pct_parsed, label_parsed, status_parsed = _delta(parsed_today, parsed_prev)
@@ -66,12 +67,15 @@ async def summary(session: SessionDep) -> DashboardSummary:
             delta_label=label_parsed,
             status=status_parsed,
         ),
-        duplicates_skipped=KpiDelta(value=0, status="neutral"),
+        duplicates_skipped=KpiDelta(
+            value=duplicates_skipped,
+            status="neutral" if duplicates_skipped == 0 else "success",
+        ),
         failed_tasks=KpiDelta(value=failed, status="error" if failed else "success"),
         offices_at_risk=KpiDelta(
             value=offices_at_risk,
             delta_pct=None,
-            delta_label="active/future",
+            delta_label="active now",
             status="warning" if offices_at_risk else "success",
         ),
     )

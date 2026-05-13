@@ -2,54 +2,97 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from app.models.schemas import RawRecordSchema, SourceType
 from app.parsers.base import BaseCollector
 
 _DATE_FMT = "%d.%m.%Y"
+_DEMO_TZ = timezone(timedelta(hours=7))
+_START_TIME = "00:00"
+_END_TIME = "23:59"
 
-_SAMPLES = [
+_THREAT_SAMPLES = [
     {
-        "city": "село Бичура",
-        "street": "улица Кирова, 12",
+        "city": "Кемерово",
+        "street": "проспект Ленина, 90",
+        "houses": "90",
+        "region": "RU-KEM",
+        "locality": "Кемеровская область - Кузбасс, Кемерово",
+        "reason": "Демо: плановое переключение питающей линии",
+    },
+    {
+        "city": "Новокузнецк",
+        "street": "улица Кирова, 55",
+        "houses": "55",
+        "region": "RU-KEM",
+        "locality": "Кемеровская область - Кузбасс, Новокузнецк",
+        "reason": "Демо: повреждение кабельной муфты",
+    },
+    {
+        "city": "Прокопьевск",
+        "street": "проспект Гагарина, 21",
+        "houses": "21",
+        "region": "RU-KEM",
+        "locality": "Кемеровская область - Кузбасс, Прокопьевск",
+        "reason": "Демо: ремонт оборудования на подстанции",
+    },
+    {
+        "city": "Юрга",
+        "street": "проспект Победы, 38",
+        "houses": "38",
+        "region": "RU-KEM",
+        "locality": "Кемеровская область - Кузбасс, Юрга",
+        "reason": "Демо: аварийная разгрузка фидера",
+    },
+    {
+        "city": "Новосибирск",
+        "street": "Красный проспект, 77",
+        "houses": "77",
+        "region": "RU-NVS",
+        "locality": "Новосибирская область, Новосибирск",
+        "reason": "Демо: реконфигурация городской сети",
+    },
+    {
+        "city": "Бердск",
+        "street": "улица Ленина, 33",
+        "houses": "33",
+        "region": "RU-NVS",
+        "locality": "Новосибирская область, Бердск",
+        "reason": "Демо: расчистка просеки рядом с ВЛ",
+    },
+    {
+        "city": "Искитим",
+        "street": "Южный микрорайон, 12",
         "houses": "12",
-        "region": "RU-BU",
-        "locality": "Республика Бурятия, Бичурский р-н, село Бичура",
-        "reason": "Демо: плановые работы",
+        "region": "RU-NVS",
+        "locality": "Новосибирская область, Искитим",
+        "reason": "Демо: замена силового трансформатора",
     },
     {
-        "city": "село Бичура",
-        "street": "улица Гагарина, 8",
-        "houses": "8",
-        "region": "RU-BU",
-        "locality": "Республика Бурятия, Бичурский р-н, село Бичура",
-        "reason": "Демо: замена оборудования",
-    },
-    {
-        "city": "село Тимирязевское",
-        "street": "улица Октябрьская, 70",
-        "houses": "70",
+        "city": "Томск",
+        "street": "проспект Ленина, 120",
+        "houses": "120",
         "region": "RU-TOM",
-        "locality": "Томская обл, Томский р-н, село Тимирязевское",
-        "reason": "Демо: ремонтные работы",
+        "locality": "Томская область, Томск",
+        "reason": "Демо: профилактические работы на распределительном пункте",
     },
     {
-        "city": "Богашево",
-        "street": "улица Киевская, 24",
-        "houses": "24",
+        "city": "Северск",
+        "street": "Коммунистический проспект, 45",
+        "houses": "45",
         "region": "RU-TOM",
-        "locality": "Томская обл, Томский р-н, Богашево",
-        "reason": "Демо: профилактика линии",
+        "locality": "Томская область, Северск",
+        "reason": "Демо: проверка релейной защиты",
     },
     {
-        "city": "деревня Губино",
-        "street": "улица Весенняя, 3",
-        "houses": "3",
+        "city": "Колпашево",
+        "street": "улица Кирова, 19",
+        "houses": "19",
         "region": "RU-TOM",
-        "locality": "Томская обл, Томский р-н, деревня Губино",
-        "reason": "Демо: переключение нагрузки",
+        "locality": "Томская область, Колпашево",
+        "reason": "Демо: осмотр линии после неблагоприятной погоды",
     },
 ]
 
@@ -84,15 +127,15 @@ class DemoHtmlCollector(BaseCollector):
 
 def _rosseti_sib_items(limit: int, run_id: str) -> list[dict]:
     items: list[dict] = []
+    event_date = _demo_day()
     for i, sample in enumerate(_take(limit)):
-        d = _day(i)
         items.append(
             {
                 "id": f"demo-sib-{run_id}-{i}",
-                "date_start": d.strftime(_DATE_FMT),
-                "date_finish": d.strftime(_DATE_FMT),
-                "time_start": "10:00",
-                "time_finish": "14:00",
+                "date_start": event_date.strftime(_DATE_FMT),
+                "date_finish": event_date.strftime(_DATE_FMT),
+                "time_start": _START_TIME,
+                "time_finish": _END_TIME,
                 "gorod": sample["city"],
                 "raion": "",
                 "street": sample["street"],
@@ -106,8 +149,8 @@ def _rosseti_sib_items(limit: int, run_id: str) -> list[dict]:
 
 def _eseti_items(limit: int, run_id: str) -> list[dict]:
     items: list[dict] = []
-    for i, sample in enumerate(_take(limit)):
-        d = _day(i)
+    event_date = _demo_day()
+    for sample in _take(limit):
         items.append(
             {
                 "demoRunId": run_id,
@@ -115,8 +158,8 @@ def _eseti_items(limit: int, run_id: str) -> list[dict]:
                 "city": sample["city"],
                 "street": sample["street"].split(",")[0],
                 "commaSeparatedHouses": sample["houses"],
-                "shutdownDate": f"{d.isoformat()}T11:00:00",
-                "restoreDate": f"{d.isoformat()}T15:00:00",
+                "shutdownDate": f"{event_date.isoformat()}T{_START_TIME}:00",
+                "restoreDate": f"{event_date.isoformat()}T{_END_TIME}:00",
                 "type": sample["reason"],
             }
         )
@@ -125,15 +168,15 @@ def _eseti_items(limit: int, run_id: str) -> list[dict]:
 
 def _tomsk_html(limit: int, run_id: str) -> str:
     rows = []
+    event_date = _demo_day().strftime(_DATE_FMT)
     for i, sample in enumerate(_take(limit)):
-        d = _day(i).strftime(_DATE_FMT)
         rows.append(
             f"""
             <tr><td id="demo-tomsk-{run_id}-{i}">
               <p class="t1"><label>Населенный пункт:</label>{sample["locality"]}</p>
               <p class="t2"><label>Адрес:</label>{sample["street"]}</p>
-              <p class="t3"><label>Дата:</label>{d}</p>
-              <p class="t3"><label>Время:</label>с 09:00 до 13:00</p>
+              <p class="t3"><label>Дата:</label>{event_date}</p>
+              <p class="t3"><label>Время:</label>с {_START_TIME} до {_END_TIME}</p>
               <p class="t4"><label>Причина:</label>{sample["reason"]}</p>
               <p class="t5"><label>Оборудование:</label>demo-{i}</p>
             </td></tr>
@@ -148,13 +191,13 @@ def _tomsk_html(limit: int, run_id: str) -> str:
 
 
 def _take(limit: int) -> list[dict]:
-    if limit <= len(_SAMPLES):
-        return _SAMPLES[:limit]
-    return [_SAMPLES[i % len(_SAMPLES)] for i in range(limit)]
+    if limit <= len(_THREAT_SAMPLES):
+        return _THREAT_SAMPLES[:limit]
+    return [_THREAT_SAMPLES[i % len(_THREAT_SAMPLES)] for i in range(limit)]
 
 
-def _day(index: int) -> date:
-    return date.today() + timedelta(days=index % 4)
+def _demo_day() -> date:
+    return datetime.now(UTC).astimezone(_DEMO_TZ).date()
 
 
 def _raw(url: str, source_type: SourceType, content: str, trace_id: UUID) -> RawRecordSchema:

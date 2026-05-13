@@ -116,7 +116,7 @@ LLM
 
 ### 3.6 Normalization Layer (LLM)
 
-Приводит `ParsedRecord` к единой схеме `NormalizedEvent` (см. §7.2). Текущая реализация использует OpenAI-compatible Chat Completions API, поэтому провайдер переключается конфигом `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
+Приводит `ParsedRecord` к единой схеме `NormalizedEvent` (см. §7.2). Текущая реализация использует Sber GigaChat напрямую через `GigaChatClient`. Поля `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` оставлены как OpenAI-compatible baseline для будущего мульти-провайдера, но сейчас активный `LLMNormalizer` их не использует.
 
 Помимо извлечения полей:
 

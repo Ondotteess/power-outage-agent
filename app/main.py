@@ -17,7 +17,9 @@ from app.db.repositories import (
     OfficeImpactStore,
     OfficeStore,
     ParsedStore,
+    PollRequestStore,
     RawStore,
+    RetryRequestStore,
     SourceStore,
     TaskStore,
 )
@@ -33,6 +35,7 @@ from app.workers.normalizer import NormalizationHandler
 from app.workers.notifier import NotificationHandler
 from app.workers.parser import ParseHandler
 from app.workers.queue import Task, TaskQueue, TaskType
+from app.workers.requests import RequestWatcher
 from app.workers.scheduler import Scheduler, SourceConfig
 
 logger = logging.getLogger(__name__)
@@ -113,14 +116,14 @@ def _parse_args() -> argparse.Namespace:
         "--demo-e2e",
         action="store_true",
         help=(
-            "Run a deterministic end-to-end demo: 5 local sample records per active source, "
+            "Run a deterministic end-to-end demo: 10 local threat records per active source, "
             "no external sites or LLM credentials required, then exit."
         ),
     )
     parser.add_argument(
         "--demo-records-per-source",
         type=int,
-        default=5,
+        default=10,
         metavar="N",
         help="Number of demo records generated for each active source.",
     )
@@ -277,11 +280,16 @@ async def main() -> None:
         )
         return
     logger.debug("Database schema ready")
-    await OfficeStore(async_session_factory).seed_if_empty(DEFAULT_OFFICES)
 
     if args.smoke_e2e and args.demo_e2e:
         logger.error("Choose either --smoke-e2e or --demo-e2e, not both")
         return
+
+    office_registry = OfficeStore(async_session_factory)
+    if args.demo_e2e:
+        await office_registry.replace_all(DEFAULT_OFFICES)
+    else:
+        await office_registry.seed_if_empty(DEFAULT_OFFICES)
 
     smoke_profile_override: dict | None = None
     collector_profile_override: dict | None = None
@@ -331,6 +339,20 @@ async def main() -> None:
     stale_tasks = await task_store.fail_incomplete("abandoned by previous pipeline process")
     if stale_tasks:
         logger.warning("Marked %d stale pending/running task(s) as failed", stale_tasks)
+    poll_request_store = PollRequestStore(async_session_factory)
+    retry_request_store = RetryRequestStore(async_session_factory)
+    stale_poll_requests = await poll_request_store.fail_incomplete(
+        "abandoned by previous pipeline process"
+    )
+    stale_retry_requests = await retry_request_store.fail_incomplete(
+        "abandoned by previous pipeline process"
+    )
+    if stale_poll_requests or stale_retry_requests:
+        logger.warning(
+            "Marked stale admin request(s) as failed  poll=%d retry=%d",
+            stale_poll_requests,
+            stale_retry_requests,
+        )
 
     raw_store = RawStore(async_session_factory)
     source_store = SourceStore(async_session_factory)
@@ -439,7 +461,14 @@ async def main() -> None:
 
     logger.info("Pipeline ready — starting scheduler and dispatcher")
     await _bootstrap_sources(scheduler)
-    await asyncio.gather(scheduler.run(), dispatcher.run())
+    request_watcher = RequestWatcher(
+        submit=dispatcher.submit,
+        source_store=source_store,
+        task_store=task_store,
+        poll_requests=poll_request_store,
+        retry_requests=retry_request_store,
+    )
+    await asyncio.gather(scheduler.run(), dispatcher.run(), request_watcher.run())
 
 
 if __name__ == "__main__":
