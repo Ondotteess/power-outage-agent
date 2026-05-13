@@ -58,6 +58,7 @@ export const realClient: ApiClient = {
 
   listOffices: () => get<Office[]>("/offices"),
   listOfficeImpacts: () => get<OfficeImpact[]>("/office-impacts"),
+  getMapOffices: () => get("/map/offices"),
   listNotifications: () => get("/notifications"),
   async listLogs() {
     return mockLogs;

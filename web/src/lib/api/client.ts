@@ -8,6 +8,7 @@ import type {
   DashboardSummary,
   LogLine,
   ListParams,
+  MapOfficesResponse,
   NormalizationQuality,
   NormalizedEvent,
   Notification,
@@ -45,6 +46,7 @@ export interface ApiClient {
   // Office matcher
   listOffices(): Promise<Office[]>;
   listOfficeImpacts(): Promise<OfficeImpact[]>;
+  getMapOffices(): Promise<MapOfficesResponse>;
 
   // Logs still use mock data in the real client.
   listNotifications(): Promise<Notification[]>;

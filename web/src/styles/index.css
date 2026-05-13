@@ -83,4 +83,78 @@
   .data-table tbody tr:hover td {
     @apply bg-bg-elevated/40;
   }
+
+  .office-map .leaflet-container {
+    @apply h-full w-full bg-bg-subtle font-sans text-ink;
+  }
+
+  .office-map .leaflet-control-zoom a,
+  .office-map .leaflet-control-attribution {
+    @apply border-line bg-bg-surface text-ink-muted;
+  }
+
+  .office-map .leaflet-control-zoom a:hover {
+    @apply bg-bg-elevated text-ink;
+  }
+
+  .office-map .leaflet-tooltip {
+    @apply rounded-md border border-line bg-bg-surface px-2 py-1 text-xs text-ink shadow-card;
+  }
+
+  .office-map .leaflet-tooltip-top::before {
+    border-top-color: #111827;
+  }
+
+  .office-map-popup .leaflet-popup-content-wrapper,
+  .office-map-popup .leaflet-popup-tip {
+    @apply border border-line bg-bg-surface text-ink shadow-card;
+  }
+
+  .office-map-popup .leaflet-popup-content {
+    @apply m-0;
+  }
+
+  .office-map-popup .leaflet-popup-close-button {
+    @apply text-ink-muted hover:text-ink;
+  }
+
+  .office-map-popup-content {
+    @apply min-w-64 space-y-3 p-3 text-xs;
+  }
+
+  .office-map-popup-title {
+    @apply text-sm font-semibold text-ink;
+  }
+
+  .office-map-popup-muted {
+    @apply mt-0.5 text-ink-muted;
+  }
+
+  .office-map-popup-status {
+    @apply inline-flex rounded-md border border-line bg-bg-elevated px-2 py-0.5 text-2xs font-medium uppercase tracking-wider text-ink-muted;
+  }
+
+  .office-map-popup-section {
+    @apply border-t border-line/60 pt-2 text-ink;
+  }
+
+  .office-map-popup-label {
+    @apply mb-1 text-2xs font-medium uppercase tracking-wider text-ink-dim;
+  }
+
+  .office-map-popup dl {
+    @apply mt-2 grid grid-cols-[72px_1fr] gap-x-2 gap-y-1;
+  }
+
+  .office-map-popup dt {
+    @apply text-ink-dim;
+  }
+
+  .office-map-popup dd {
+    @apply text-right font-mono text-ink-muted;
+  }
+
+  .office-map-popup ul {
+    @apply mt-1 list-disc space-y-1 pl-4 text-ink-muted;
+  }
 }

@@ -16,7 +16,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routers import dashboard, notifications, offices, pipeline, records, sources, tasks
+from app.api.routers import (
+    dashboard,
+    map,
+    notifications,
+    offices,
+    pipeline,
+    records,
+    sources,
+    tasks,
+)
 from app.db.engine import async_session_factory, init_db
 from app.db.repositories import OfficeStore
 from app.matching.defaults import DEFAULT_OFFICES
@@ -54,6 +63,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(dashboard.router)
+    app.include_router(map.router)
     app.include_router(offices.router)
     app.include_router(notifications.router)
     app.include_router(pipeline.router)

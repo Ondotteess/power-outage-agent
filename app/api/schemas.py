@@ -100,6 +100,31 @@ class OfficeImpactOut(BaseModel):
     detected_at: datetime
 
 
+class MapOfficeImpactOut(BaseModel):
+    id: UUID
+    reason: str | None
+    severity: str
+    starts_at: datetime
+    ends_at: datetime | None
+    event_type: str | None = None
+
+
+class MapOfficeOut(BaseModel):
+    id: UUID
+    name: str
+    address: str
+    city: str
+    region: str
+    latitude: float | None = None
+    longitude: float | None = None
+    status: str
+    active_impacts: list[MapOfficeImpactOut] = Field(default_factory=list)
+
+
+class MapOfficesResponse(BaseModel):
+    offices: list[MapOfficeOut] = Field(default_factory=list)
+
+
 class NotificationOut(BaseModel):
     id: UUID
     office_id: UUID

@@ -176,6 +176,34 @@ export interface OfficeImpact {
   detected_at: string;
 }
 
+export type MapOfficeStatus = "ok" | "risk" | "critical";
+export type MapImpactSeverity = "low" | "medium" | "high" | "critical" | "unknown";
+
+export interface MapOfficeImpact {
+  id: string;
+  reason: string | null;
+  severity: MapImpactSeverity;
+  starts_at: string;
+  ends_at: string | null;
+  event_type: string | null;
+}
+
+export interface MapOffice {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  region: string;
+  latitude: number | null;
+  longitude: number | null;
+  status: MapOfficeStatus;
+  active_impacts: MapOfficeImpact[];
+}
+
+export interface MapOfficesResponse {
+  offices: MapOffice[];
+}
+
 export interface Notification {
   id: string;
   office_id: string;

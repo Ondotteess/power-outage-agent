@@ -52,6 +52,32 @@ office impacts и notifications читаются из FastAPI.
 VITE_USE_MOCK=0
 ```
 
+### Office threat map
+
+The admin UI has an office map at `http://localhost:5173/map`. It reads
+`GET /api/map/offices` when `VITE_USE_MOCK=0`, or mock data in the default
+frontend-only mode.
+
+Office coordinates are stored manually on the office record:
+
+- `latitude`
+- `longitude`
+
+There is no automatic geocoding and no Google/Yandex map API integration. If an
+office has no coordinates, the map skips its marker and shows it in the
+"Missing coordinates" list.
+
+Marker colors:
+
+- green: `ok`, no active impacts
+- yellow: `risk`, active low/medium/unknown impact
+- red: `critical`, active high/critical impact or an event that clearly means
+  outage/closure
+
+The map page includes local filters for status, severity, problematic offices,
+and search by office name/address/city/region. Use the `Refresh` button to
+reload from the API.
+
 В dev-режиме Vite проксирует `/api/*` на `http://localhost:8000`. Для продакшен-сборки (`npm run build`) выкладывайте `web/dist/` за тем же origin, что и FastAPI, либо настройте reverse proxy.
 
 ### Архитектура frontend
@@ -67,12 +93,12 @@ web/
 │   │   ├── pipeline/    # PipelineFlow (горизонтальный flow со статусами стейджей)
 │   │   ├── activity/    # ActivityFeed
 │   │   └── charts/      # QueueBacklogChart, ConfidenceBars (recharts)
-│   ├── pages/           # Dashboard + 14 разделов
+│   ├── pages/           # Dashboard + 15 разделов
 │   └── styles/index.css # Tailwind layer + кастомные классы (.card, .btn, .data-table)
 └── ...
 ```
 
-Стек: **Vite + React 18 + TypeScript + Tailwind + react-router-dom + @tanstack/react-query + recharts + lucide-react**. Сервер-состояние идёт через React Query, доменные типы — в `lib/api/types.ts` и зеркалят `app/api/schemas.py`.
+Стек: **Vite + React 18 + TypeScript + Tailwind + react-router-dom + @tanstack/react-query + recharts + lucide-react + Leaflet**. Сервер-состояние идёт через React Query, доменные типы — в `lib/api/types.ts` и зеркалят `app/api/schemas.py`.
 
 ### Что mock vs реальный backend
 
@@ -85,6 +111,7 @@ web/
 | Normalization quality | реальный (`/api/dashboard/normalization-quality`) |
 | Queue backlog 24h | **mock** (нет персистентности глубины очереди) |
 | Office matcher / Office impacts | реальный (`/api/offices`, `/api/office-impacts`) |
+| Office threat map | реальный (`/api/map/offices`) |
 | Notifications | реальный (`/api/notifications`) |
 | Logs tail | **mock** (логи не агрегируются в БД) |
 | Action `Run poll now` / `Retry` | **stub** на бекенде (202 + сообщение; нужен IPC между admin API и pipeline-процессом) |

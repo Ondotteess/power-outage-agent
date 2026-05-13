@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import desc, distinct, func, or_, select
+from sqlalchemy import and_, desc, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -152,6 +152,27 @@ async def list_office_impacts(
         .offset(offset)
     )
     return [(impact, office) for impact, office in result.all()]
+
+
+async def list_map_office_rows(
+    session: AsyncSession,
+    *,
+    now: datetime,
+) -> list[tuple[Office, OfficeImpact | None, NormalizedEvent | None]]:
+    result = await session.execute(
+        select(Office, OfficeImpact, NormalizedEvent)
+        .outerjoin(
+            OfficeImpact,
+            and_(
+                OfficeImpact.office_id == Office.id,
+                OfficeImpact.impact_start <= now,
+                or_(OfficeImpact.impact_end.is_(None), OfficeImpact.impact_end >= now),
+            ),
+        )
+        .outerjoin(NormalizedEvent, NormalizedEvent.event_id == OfficeImpact.event_id)
+        .order_by(Office.name, desc(OfficeImpact.impact_start))
+    )
+    return [(office, impact, event) for office, impact, event in result.all()]
 
 
 async def list_notifications(

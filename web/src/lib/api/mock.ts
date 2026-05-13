@@ -7,6 +7,7 @@ import type {
   ActivityEvent,
   LogLine,
   ListParams,
+  MapOffice,
   NormalizedEvent,
   Notification,
   Office,
@@ -206,6 +207,8 @@ const OFFICES: Office[] = [
     city: "Кемерово",
     address: "ул. Кирова, 12",
     region: "RU-KEM",
+    latitude: 55.3549,
+    longitude: 86.0873,
   },
   {
     id: "of-2",
@@ -213,6 +216,8 @@ const OFFICES: Office[] = [
     city: "Кемерово",
     address: "пр. Советский, 47",
     region: "RU-KEM",
+    latitude: 55.3552,
+    longitude: 86.0918,
   },
   {
     id: "of-3",
@@ -220,6 +225,8 @@ const OFFICES: Office[] = [
     city: "Новокузнецк",
     address: "ул. Тухачевского, 5",
     region: "RU-KEM",
+    latitude: 53.7557,
+    longitude: 87.1099,
   },
 ];
 
@@ -245,6 +252,71 @@ const OFFICE_IMPACTS: OfficeImpact[] = [
     impact_level: "medium",
     match_strategy: "geo_radius",
     detected_at: minutesAgo(22),
+  },
+];
+
+const MAP_OFFICES: MapOffice[] = [
+  {
+    id: OFFICES[0].id,
+    name: OFFICES[0].name,
+    city: OFFICES[0].city,
+    address: OFFICES[0].address,
+    region: OFFICES[0].region,
+    latitude: OFFICES[0].latitude ?? null,
+    longitude: OFFICES[0].longitude ?? null,
+    status: "critical",
+    active_impacts: [
+      {
+        id: OFFICE_IMPACTS[0].id,
+        reason: "Planned power outage on the office feeder",
+        severity: "high",
+        starts_at: OFFICE_IMPACTS[0].impact_start,
+        ends_at: OFFICE_IMPACTS[0].impact_end,
+        event_type: "power_outage",
+      },
+    ],
+  },
+  {
+    id: OFFICES[1].id,
+    name: OFFICES[1].name,
+    city: OFFICES[1].city,
+    address: OFFICES[1].address,
+    region: OFFICES[1].region,
+    latitude: OFFICES[1].latitude ?? null,
+    longitude: OFFICES[1].longitude ?? null,
+    status: "ok",
+    active_impacts: [],
+  },
+  {
+    id: OFFICES[2].id,
+    name: OFFICES[2].name,
+    city: OFFICES[2].city,
+    address: OFFICES[2].address,
+    region: OFFICES[2].region,
+    latitude: OFFICES[2].latitude ?? null,
+    longitude: OFFICES[2].longitude ?? null,
+    status: "risk",
+    active_impacts: [
+      {
+        id: OFFICE_IMPACTS[1].id,
+        reason: "Maintenance work near the office address",
+        severity: "medium",
+        starts_at: OFFICE_IMPACTS[1].impact_start,
+        ends_at: OFFICE_IMPACTS[1].impact_end,
+        event_type: "maintenance",
+      },
+    ],
+  },
+  {
+    id: "of-4",
+    name: "Address-only office",
+    city: "Томск",
+    address: "ул. Учебная, 3",
+    region: "RU-TOM",
+    latitude: null,
+    longitude: null,
+    status: "ok",
+    active_impacts: [],
   },
 ];
 
@@ -461,6 +533,10 @@ export const mockClient: ApiClient = {
   async listOfficeImpacts() {
     await wait();
     return OFFICE_IMPACTS;
+  },
+  async getMapOffices() {
+    await wait();
+    return { offices: MAP_OFFICES };
   },
   async listNotifications() {
     await wait();
