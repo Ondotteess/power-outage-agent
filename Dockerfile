@@ -8,7 +8,7 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --upgrade pip "wheel>=0.46.2" && pip install .
+RUN pip install --upgrade pip && pip install ".[web]"
 
 COPY docs ./docs
 

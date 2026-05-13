@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import (
     NormalizedEvent,
+    Notification,
     Office,
     OfficeImpact,
     ParsedRecord,
@@ -18,6 +19,7 @@ from app.db.models import (
 )
 from app.models.schemas import (
     NormalizedEventSchema,
+    NotificationSchema,
     OfficeImpactSchema,
     ParsedRecordSchema,
     RawRecordSchema,
@@ -79,16 +81,6 @@ class TaskStore:
 class RawStore:
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._sf = session_factory
-
-    async def exists_by_hash(self, content_hash: str) -> bool:
-        logger.debug("RawStore  exists_by_hash  hash=%s", content_hash)
-        async with self._sf() as session:
-            result = await session.execute(
-                select(RawRecord.id).where(RawRecord.content_hash == content_hash)
-            )
-            exists = result.scalar_one_or_none() is not None
-        logger.debug("RawStore  exists_by_hash  hash=%s  result=%s", content_hash, exists)
-        return exists
 
     async def get_id_by_hash(self, content_hash: str) -> UUID | None:
         logger.debug("RawStore  get_id_by_hash  hash=%s", content_hash)
@@ -256,6 +248,12 @@ class OfficeStore:
             )
             return list(result.scalars().all())
 
+    async def get_by_id(self, office_id: UUID) -> Office | None:
+        logger.debug("OfficeStore  get_by_id  office_id=%s", office_id)
+        async with self._sf() as session:
+            result = await session.execute(select(Office).where(Office.id == office_id))
+            return result.scalar_one_or_none()
+
     async def seed_if_empty(self, defaults: list[dict]) -> None:
         logger.debug("OfficeStore  seed_if_empty  defaults=%d", len(defaults))
         async with self._sf() as session:
@@ -319,6 +317,62 @@ class OfficeImpactStore:
 
         logger.info("OfficeImpactStore  saved %d impact(s)", saved)
         return saved
+
+
+class NotificationStore:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def save(
+        self,
+        notification: NotificationSchema,
+        trace_id: UUID,
+        *,
+        channel: str,
+        status: str,
+    ) -> UUID:
+        async with self._sf() as session:
+            result = await session.execute(
+                select(Notification)
+                .where(Notification.office_id == notification.office_id)
+                .where(Notification.event_id == notification.event_id)
+                .where(Notification.channel == channel)
+                .limit(1)
+            )
+            existing = result.scalars().first()
+            if existing is not None:
+                existing.status = status
+                existing.severity = str(notification.severity)
+                existing.summary = notification.source_summary
+                existing.trace_id = trace_id
+                existing.emitted_at = notification.emitted_at
+                await session.commit()
+                logger.info(
+                    "NotificationStore  updated  notification_id=%s  channel=%s",
+                    existing.id,
+                    channel,
+                )
+                return existing.id
+
+            row = Notification(
+                id=notification.notification_id,
+                office_id=notification.office_id,
+                event_id=notification.event_id,
+                channel=channel,
+                status=status,
+                severity=str(notification.severity),
+                summary=notification.source_summary,
+                trace_id=trace_id,
+                emitted_at=notification.emitted_at,
+            )
+            session.add(row)
+            await session.commit()
+            logger.info(
+                "NotificationStore  saved  notification_id=%s  channel=%s",
+                notification.notification_id,
+                channel,
+            )
+            return notification.notification_id
 
 
 async def _find_existing_normalized_event(

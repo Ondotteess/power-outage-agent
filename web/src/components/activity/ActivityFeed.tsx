@@ -9,6 +9,7 @@ const TYPE_LABEL: Record<ActivityEvent["type"], string> = {
   DuplicateSkipped: "Dedup skip",
   TaskFailed: "Task failed",
   OfficeImpactDetected: "Office impact",
+  NotificationEmitted: "Notification",
   PipelineHeartbeat: "Heartbeat",
 };
 

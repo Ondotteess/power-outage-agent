@@ -112,7 +112,7 @@ async def test_normalization_handler_saves_normalized_event():
     assert normalizer.seen[0].id == parsed.id
     assert store.saved == [(expected, task.trace_id)]
     assert len(submitted) == 1
-    assert submitted[0].task_type == TaskType.MATCH_OFFICES
+    assert submitted[0].task_type == TaskType.DEDUPLICATE_EVENT
     assert submitted[0].payload == {"event_id": str(expected.event_id)}
 
 

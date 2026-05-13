@@ -4,13 +4,16 @@ import argparse
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
+from app.alerts.telegram import TelegramSender
 from app.config import settings
 from app.db.engine import async_session_factory, init_db
 from app.db.repositories import (
     NormalizedEventStore,
+    NotificationStore,
     OfficeImpactStore,
     OfficeStore,
     ParsedStore,
@@ -19,11 +22,15 @@ from app.db.repositories import (
     TaskStore,
 )
 from app.matching.defaults import DEFAULT_OFFICES
+from app.normalization.demo import DemoNormalizer
 from app.normalization.llm import LLMNormalizer
+from app.parsers.demo_collectors import DemoHtmlCollector, DemoJsonCollector
 from app.workers.collector import CollectorHandler
+from app.workers.deduplicator import DeduplicationHandler
 from app.workers.dispatcher import Dispatcher
 from app.workers.matcher import OfficeMatchHandler
 from app.workers.normalizer import NormalizationHandler
+from app.workers.notifier import NotificationHandler
 from app.workers.parser import ParseHandler
 from app.workers.queue import Task, TaskQueue, TaskType
 from app.workers.scheduler import Scheduler, SourceConfig
@@ -102,6 +109,28 @@ def _parse_args() -> argparse.Namespace:
         metavar="N",
         help="Number of parsed records per source to normalize in --smoke-e2e mode.",
     )
+    parser.add_argument(
+        "--demo-e2e",
+        action="store_true",
+        help=(
+            "Run a deterministic end-to-end demo: 5 local sample records per active source, "
+            "no external sites or LLM credentials required, then exit."
+        ),
+    )
+    parser.add_argument(
+        "--demo-records-per-source",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Number of demo records generated for each active source.",
+    )
+    parser.add_argument(
+        "--demo-step-delay",
+        type=float,
+        default=0.75,
+        metavar="SECONDS",
+        help="Small per-task delay in --demo-e2e so the web UI can show running stages.",
+    )
     return parser.parse_args()
 
 
@@ -135,12 +164,27 @@ def _redact_dsn(dsn: str) -> str:
         return "<invalid database_url>"
 
 
+def _build_telegram_sender() -> TelegramSender | None:
+    token_configured = bool(settings.telegram_bot_token.strip())
+    chat_configured = bool(settings.telegram_chat_id.strip())
+    if token_configured and chat_configured:
+        logger.info("Telegram notifications enabled")
+        return TelegramSender(settings.telegram_bot_token, settings.telegram_chat_id)
+    if token_configured or chat_configured:
+        logger.warning(
+            "Telegram notifications disabled: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are both required"
+        )
+    return None
+
+
 async def _load_source_configs(*, include_inactive: bool = False) -> list[SourceConfig]:
     source_store = SourceStore(async_session_factory)
     logger.debug("Seeding sources table if empty")
     await source_store.seed_if_empty(_DEFAULT_SOURCES)
 
-    sources = await source_store.list_all() if include_inactive else await source_store.list_active()
+    sources = (
+        await source_store.list_all() if include_inactive else await source_store.list_active()
+    )
     if not sources:
         logger.warning("No sources found in DB — pipeline will idle")
         return []
@@ -193,6 +237,19 @@ async def _submit_sources_once(dispatcher: Dispatcher, sources: list[SourceConfi
         await dispatcher.submit(task)
 
 
+def _with_delay(
+    handler: Callable[[Task], Awaitable[None]], delay_seconds: float
+) -> Callable[[Task], Awaitable[None]]:
+    if delay_seconds <= 0:
+        return handler
+
+    async def wrapped(task: Task) -> None:
+        await asyncio.sleep(delay_seconds)
+        await handler(task)
+
+    return wrapped
+
+
 async def main() -> None:
     args = _parse_args()
     _setup_logging(args.log_level)
@@ -222,18 +279,51 @@ async def main() -> None:
     logger.debug("Database schema ready")
     await OfficeStore(async_session_factory).seed_if_empty(DEFAULT_OFFICES)
 
+    if args.smoke_e2e and args.demo_e2e:
+        logger.error("Choose either --smoke-e2e or --demo-e2e, not both")
+        return
+
     smoke_profile_override: dict | None = None
+    collector_profile_override: dict | None = None
     llm_normalization_enabled = settings.llm_normalization_enabled
     llm_normalization_max_per_raw = settings.llm_normalization_max_per_raw
+    run_once = args.smoke_e2e or args.demo_e2e
+    include_inactive_sources = False
+    normalizer = LLMNormalizer()
+    demo_step_delay = 0.0
+    demo_emit_unmatched = False
+    collectors = None
     if args.smoke_e2e:
         limit = max(0, args.smoke_normalize_limit)
         smoke_profile_override = {"normalize_enabled": True, "normalize_limit": limit}
         llm_normalization_enabled = True
         llm_normalization_max_per_raw = limit
+        include_inactive_sources = True
         logger.warning(
             "Smoke E2E mode: all configured sources will be polled once; "
             "LLM normalization forced on; normalize_limit=%d",
             limit,
+        )
+    elif args.demo_e2e:
+        limit = max(1, args.demo_records_per_source)
+        smoke_profile_override = {"normalize_enabled": True, "normalize_limit": limit}
+        collector_profile_override = {"paginate": None}
+        llm_normalization_enabled = True
+        llm_normalization_max_per_raw = limit
+        normalizer = DemoNormalizer()
+        demo_step_delay = max(0.0, args.demo_step_delay)
+        demo_emit_unmatched = True
+        run_id = str(uuid4())
+        collectors = {
+            "html": DemoHtmlCollector(limit, run_id=run_id),
+            "json": DemoJsonCollector(limit, run_id=run_id),
+        }
+        logger.warning(
+            "Demo E2E mode: active sources will use local fixtures; "
+            "records_per_source=%d; step_delay=%.2fs; run_id=%s",
+            limit,
+            demo_step_delay,
+            run_id,
         )
 
     queue = TaskQueue()
@@ -248,6 +338,7 @@ async def main() -> None:
     normalized_store = NormalizedEventStore(async_session_factory)
     office_store = OfficeStore(async_session_factory)
     office_impact_store = OfficeImpactStore(async_session_factory)
+    notification_store = NotificationStore(async_session_factory)
     logger.debug(
         "Core objects created: TaskQueue, TaskStore, RawStore, ParsedStore, "
         "NormalizedEventStore, OfficeStore, OfficeImpactStore"
@@ -255,8 +346,17 @@ async def main() -> None:
 
     dispatcher = Dispatcher(queue, task_store)
 
-    collector_handler = CollectorHandler(dispatcher.submit, raw_store, source_store)
-    dispatcher.register(TaskType.FETCH_SOURCE, collector_handler.handle)
+    collector_handler = CollectorHandler(
+        dispatcher.submit,
+        raw_store,
+        source_store,
+        collectors=collectors,
+        parser_profile_override=collector_profile_override,
+    )
+    dispatcher.register(
+        TaskType.FETCH_SOURCE,
+        _with_delay(collector_handler.handle, demo_step_delay),
+    )
 
     parse_handler = ParseHandler(
         dispatcher.submit,
@@ -270,31 +370,59 @@ async def main() -> None:
             max(0, args.smoke_normalize_limit) if args.smoke_e2e else None
         ),
     )
-    dispatcher.register(TaskType.PARSE_CONTENT, parse_handler.handle)
+    dispatcher.register(
+        TaskType.PARSE_CONTENT,
+        _with_delay(parse_handler.handle, demo_step_delay),
+    )
 
     normalization_handler = NormalizationHandler(
         parsed_store,
         normalized_store,
-        LLMNormalizer(),
+        normalizer,
         dispatcher.submit,
     )
-    dispatcher.register(TaskType.NORMALIZE_EVENT, normalization_handler.handle)
+    dispatcher.register(
+        TaskType.NORMALIZE_EVENT,
+        _with_delay(normalization_handler.handle, demo_step_delay),
+    )
+
+    deduplication_handler = DeduplicationHandler(normalized_store, dispatcher.submit)
+    dispatcher.register(
+        TaskType.DEDUPLICATE_EVENT,
+        _with_delay(deduplication_handler.handle, demo_step_delay),
+    )
 
     office_match_handler = OfficeMatchHandler(
         normalized_store,
         office_store,
         office_impact_store,
+        dispatcher.submit,
+        demo_emit_unmatched=demo_emit_unmatched,
     )
-    dispatcher.register(TaskType.MATCH_OFFICES, office_match_handler.handle)
+    dispatcher.register(
+        TaskType.MATCH_OFFICES,
+        _with_delay(office_match_handler.handle, demo_step_delay),
+    )
+
+    notification_handler = NotificationHandler(
+        notification_store,
+        office_store,
+        normalized_store,
+        telegram_sender=_build_telegram_sender(),
+    )
+    dispatcher.register(
+        TaskType.EMIT_EVENT,
+        _with_delay(notification_handler.handle, demo_step_delay),
+    )
 
     logger.debug(
         "Dispatcher created; handlers registered for FETCH_SOURCE, PARSE_CONTENT, "
-        "NORMALIZE_EVENT, MATCH_OFFICES"
+        "NORMALIZE_EVENT, DEDUPLICATE_EVENT, MATCH_OFFICES, EMIT_EVENT"
     )
 
     scheduler = Scheduler(dispatcher.submit)
-    if args.smoke_e2e:
-        sources = await _load_source_configs(include_inactive=True)
+    if run_once:
+        sources = await _load_source_configs(include_inactive=include_inactive_sources)
         if not sources:
             return
         runner = asyncio.create_task(dispatcher.run())
@@ -305,7 +433,8 @@ async def main() -> None:
             runner.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await runner
-        logger.info("Smoke E2E complete — queue drained")
+        label = "Demo E2E" if args.demo_e2e else "Smoke E2E"
+        logger.info("%s complete — queue drained", label)
         return
 
     logger.info("Pipeline ready — starting scheduler and dispatcher")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 
 from fastapi import APIRouter, Query
 from sqlalchemy import desc, select
@@ -15,7 +14,14 @@ from app.api.schemas import (
     NormalizationQuality,
     QueueBacklogPoint,
 )
-from app.db.models import NormalizedEvent, Office, OfficeImpact, ParsedRecord, RawRecord
+from app.db.models import (
+    NormalizedEvent,
+    Notification,
+    Office,
+    OfficeImpact,
+    ParsedRecord,
+    RawRecord,
+)
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -144,6 +150,27 @@ async def activity(
             )
         )
 
+    notification_rows = (
+        await session.execute(
+            select(Notification, Office)
+            .join(Office, Office.id == Notification.office_id)
+            .order_by(desc(Notification.emitted_at))
+            .limit(limit // 3 + 5)
+        )
+    ).all()
+    for notification, office in notification_rows:
+        severity = "success" if notification.status == "sent" else "warning"
+        items.append(
+            ActivityEvent(
+                id=f"notification-{notification.id}",
+                type="NotificationEmitted",
+                severity=severity,
+                source=office.name,
+                message=notification.summary,
+                at=notification.emitted_at,
+            )
+        )
+
     task_rows = await queries.list_tasks(
         session,
         status="failed",
@@ -221,8 +248,3 @@ async def queue_backlog() -> list[QueueBacklogPoint]:
             )
         )
     return points
-
-
-@router.get("/_ping")
-async def ping() -> dict:
-    return {"ok": True, "now": datetime.now(UTC), "id": str(uuid4())}

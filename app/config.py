@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     gigachat_verify_ssl: bool = True
 
     telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     log_level: str = "INFO"
 

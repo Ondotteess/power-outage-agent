@@ -77,7 +77,7 @@ class NormalizationHandler:
         if self._submit is not None:
             await self._submit(
                 Task(
-                    task_type=TaskType.MATCH_OFFICES,
+                    task_type=TaskType.DEDUPLICATE_EVENT,
                     payload={"event_id": str(event_id)},
                     trace_id=task.trace_id,
                 )

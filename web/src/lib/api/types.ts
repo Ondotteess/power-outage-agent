@@ -119,6 +119,7 @@ export interface ActivityEvent {
     | "DuplicateSkipped"
     | "TaskFailed"
     | "OfficeImpactDetected"
+    | "NotificationEmitted"
     | "PipelineHeartbeat";
   severity: Severity;
   source: string | null;
@@ -150,7 +151,7 @@ export interface ActionResponse {
   task_id: string | null;
 }
 
-// Domain-only types (not yet backed by real endpoints — mock-only for now)
+// Domain/UI types shared by the real and mock API clients.
 export interface Office {
   id: string;
   name: string;
@@ -179,8 +180,10 @@ export interface Notification {
   id: string;
   office_id: string;
   office_name: string;
-  channel: "telegram" | "email" | "webhook";
+  event_id?: string;
+  channel: "dashboard" | "telegram" | "email" | "webhook";
   status: "sent" | "queued" | "failed";
+  severity?: "low" | "medium" | "high";
   emitted_at: string;
   summary: string;
 }

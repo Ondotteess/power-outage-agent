@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from app.matching.office_matcher import MatchableEvent, MatchableOffice, OfficeMatcher
-from app.models.schemas import OfficeImpactSchema
-from app.workers.queue import Task
+from app.matching.office_matcher import MatchableEvent, MatchableOffice, OfficeMatch, OfficeMatcher
+from app.models.schemas import ImpactLevel, OfficeImpactSchema
+from app.workers.queue import Task, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,15 @@ class OfficeMatchHandler:
         normalized_store: NormalizedEventStoreProtocol,
         office_store: OfficeStoreProtocol,
         impact_store: OfficeImpactStoreProtocol,
+        submit: Callable[[Task], Awaitable[None]] | None = None,
+        *,
+        demo_emit_unmatched: bool = False,
     ) -> None:
         self._normalized_store = normalized_store
         self._office_store = office_store
         self._impact_store = impact_store
+        self._submit = submit
+        self._demo_emit_unmatched = demo_emit_unmatched
 
     async def handle(self, task: Task) -> None:
         event_id = UUID(task.payload["event_id"])
@@ -58,6 +64,15 @@ class OfficeMatchHandler:
         offices = await self._office_store.list_active()
         matcher = OfficeMatcher([_to_matchable_office(office) for office in offices])
         matches = matcher.match(_to_matchable_event(event))
+        if not matches and self._demo_emit_unmatched and offices:
+            matches = [
+                OfficeMatch(
+                    office=_to_matchable_office(offices[0]),
+                    impact_level=ImpactLevel.LOW,
+                    match_strategy="demo_unmatched",
+                    match_score=0.1,
+                )
+            ]
         detected_at = datetime.now(UTC)
         impacts = [
             OfficeImpactSchema(
@@ -75,6 +90,21 @@ class OfficeMatchHandler:
         ]
 
         saved = await self._impact_store.save_many(impacts, trace_id=task.trace_id)
+        if self._submit is not None:
+            for impact in impacts:
+                await self._submit(
+                    Task(
+                        task_type=TaskType.EMIT_EVENT,
+                        payload={
+                            "office_id": str(impact.office_id),
+                            "event_id": str(impact.event_id),
+                            "impact_level": str(impact.impact_level),
+                            "match_strategy": impact.match_strategy,
+                            "match_score": impact.match_score,
+                        },
+                        trace_id=task.trace_id,
+                    )
+                )
         logger.info(
             "OfficeMatchHandler  matched  event_id=%s  matches=%d  saved=%d  trace=%s",
             event_id,

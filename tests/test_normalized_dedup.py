@@ -14,9 +14,7 @@ class ExistingEvent:
     parsed_record_id: UUID | None = field(default_factory=uuid4)
     event_type: str = "power_outage"
     start_time: datetime = field(default_factory=lambda: datetime(2026, 5, 12, 3, tzinfo=UTC))
-    end_time: datetime | None = field(
-        default_factory=lambda: datetime(2026, 5, 12, 9, tzinfo=UTC)
-    )
+    end_time: datetime | None = field(default_factory=lambda: datetime(2026, 5, 12, 9, tzinfo=UTC))
     location_raw: str = "old raw"
     location_normalized: str | None = "old normalized"
     location_city: str | None = "Old City"

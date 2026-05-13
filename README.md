@@ -28,6 +28,24 @@ npm run dev
 # http://localhost:5173
 ```
 
+### Demo E2E одной командой
+
+```bash
+docker compose --profile demo up --build db api web demo-runner
+# web: http://localhost:5173
+# api: http://localhost:8000/docs
+```
+
+Demo-runner берёт по 5 локальных demo-записей на каждый активный источник и прогоняет
+весь pipeline без внешних сайтов и LLM-ключей:
+
+```text
+FETCH_SOURCE → PARSE_CONTENT → NORMALIZE_EVENT → DEDUPLICATE_EVENT → MATCH_OFFICES → EMIT_EVENT
+```
+
+В UI переключатель уже задан через `VITE_USE_MOCK=0`, поэтому dashboard, pipeline,
+office impacts и notifications читаются из FastAPI.
+
 Фронт по умолчанию использует **mock-данные** (`VITE_USE_MOCK=1`). Чтобы переключиться на реальный backend, поднимите Admin API (выше) и создайте `web/.env.local`:
 
 ```env
@@ -66,8 +84,8 @@ web/
 | Activity feed | реальный (синтезируется из RAW+Parsed+Normalized+failed Tasks) |
 | Normalization quality | реальный (`/api/dashboard/normalization-quality`) |
 | Queue backlog 24h | **mock** (нет персистентности глубины очереди) |
-| Office matcher / Office impacts | **mock** (Week 3) |
-| Notifications | **mock** (Week 4) |
+| Office matcher / Office impacts | реальный (`/api/offices`, `/api/office-impacts`) |
+| Notifications | реальный (`/api/notifications`) |
 | Logs tail | **mock** (логи не агрегируются в БД) |
 | Action `Run poll now` / `Retry` | **stub** на бекенде (202 + сообщение; нужен IPC между admin API и pipeline-процессом) |
 

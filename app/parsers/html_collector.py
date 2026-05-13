@@ -14,11 +14,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (compatible; PowerOutageAgent/0.1; +https://github.com/your-org/power-outage-agent)"
-    )
-}
+_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; PowerOutageAgent/0.1)"}
 
 
 class HtmlCollector(BaseCollector):

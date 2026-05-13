@@ -90,6 +90,30 @@ async def test_office_match_handler_saves_impacts():
     assert impacts[0].match_strategy == "exact_address"
 
 
+async def test_office_match_handler_enqueues_notifications():
+    event = FakeEvent()
+    office = FakeOffice()
+    impact_store = FakeImpactStore()
+    submitted: list[Task] = []
+
+    async def submit(task: Task) -> None:
+        submitted.append(task)
+
+    handler = OfficeMatchHandler(
+        FakeNormalizedStore(event),
+        FakeOfficeStore([office]),
+        impact_store,
+        submit,
+    )
+
+    await handler.handle(_task(event.event_id))
+
+    assert len(submitted) == 1
+    assert submitted[0].task_type == TaskType.EMIT_EVENT
+    assert submitted[0].payload["office_id"] == str(office.id)
+    assert submitted[0].payload["event_id"] == str(event.event_id)
+
+
 async def test_office_match_handler_raises_when_event_missing():
     handler = OfficeMatchHandler(
         FakeNormalizedStore(None),

@@ -15,4 +15,5 @@ data/processed/*
 .pytest_cache
 .coverage
 *.tsbuildinfo
+web/node_modules/
 samples

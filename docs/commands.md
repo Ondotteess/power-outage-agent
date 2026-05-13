@@ -16,6 +16,23 @@ pip install -e ".[dev]"
 
 ## Запуск
 
+### Demo E2E одной командой
+
+```bash
+docker compose --profile demo up --build db api web demo-runner
+```
+
+Что делает команда:
+
+- поднимает Postgres, FastAPI (`http://localhost:8000`) и web (`http://localhost:5173`);
+- запускает одноразовый demo-runner;
+- берёт по 5 локальных demo-записей на каждый активный источник;
+- прогоняет стадии `fetch_source → parse_content → normalize_event → deduplicate_event → match_offices → emit_event`;
+- пишет office impacts и dashboard notifications в БД, чтобы процесс был виден в UI.
+
+Demo-режим не ходит во внешние сайты и не требует GigaChat credentials. Обычный smoke
+с реальным LLM остаётся отдельной командой ниже.
+
 ```bash
 # Поднять только Postgres
 docker compose up db -d

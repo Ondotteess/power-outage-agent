@@ -46,7 +46,7 @@ export interface ApiClient {
   listOffices(): Promise<Office[]>;
   listOfficeImpacts(): Promise<OfficeImpact[]>;
 
-  // Mock-only (no backend yet)
+  // Logs still use mock data in the real client.
   listNotifications(): Promise<Notification[]>;
   listLogs(): Promise<LogLine[]>;
 }

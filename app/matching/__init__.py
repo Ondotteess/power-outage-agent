@@ -1,2 +1,1 @@
 """Office matching domain services."""
-

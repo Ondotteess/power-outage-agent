@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     NormalizedEvent,
+    Notification,
     Office,
     OfficeImpact,
     ParsedRecord,
@@ -151,6 +152,22 @@ async def list_office_impacts(
         .offset(offset)
     )
     return [(impact, office) for impact, office in result.all()]
+
+
+async def list_notifications(
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[tuple[Notification, Office]]:
+    result = await session.execute(
+        select(Notification, Office)
+        .join(Office, Office.id == Notification.office_id)
+        .order_by(desc(Notification.emitted_at))
+        .limit(limit)
+        .offset(offset)
+    )
+    return [(notification, office) for notification, office in result.all()]
 
 
 async def count_active_office_impacts(session: AsyncSession, now: datetime) -> int:

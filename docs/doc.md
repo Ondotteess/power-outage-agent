@@ -121,7 +121,7 @@ power-outage-agent/
 | `telegram_bot_token` | `""` | Placeholder для будущих уведомлений |
 | `log_level` | `INFO` | Уровень логирования |
 
-`.env.example` содержит шаблоны для всех `GIGACHAT_*` переменных. `.env` (и опциональный `.env.local` для секретов) **в `.gitignore` НЕ попадает** — `.env` отслежен с первых коммитов проекта (известный долг — см. TODO).
+`.env.example` содержит шаблоны для всех `GIGACHAT_*` переменных. Секреты кладутся в локальные `.env` / `.env.local`; оба файла игнорируются git.
 
 Docker Compose читает `.env` и опциональный `.env.local`. Для сервиса `app` DSN переопределяется на `postgresql+asyncpg://postgres:postgres@db:5432/outage_agent`, потому что внутри контейнера PostgreSQL доступен по имени сервиса `db`.
 
@@ -336,5 +336,5 @@ ruff check .
 - GigaChat-промпт не идеально нормализует адрес: модель оставляет сокращения (`ул.` вместо `улица`) и иногда даёт `confidence=1.0` на типовых случаях — нужна калибровка. На будущее: few-shot примеры или жёстче формулировка.
 - GigaChat `verify_ssl=False` — компромисс по российским корневым CA. Корректный фикс — установить Russian Trusted Root CA в `certifi`-bundle или системный cert store.
 - `RossetiTomskParser` всё ещё содержит простую эвристику split locality по запятым.
-- `.env` исторически отслежен в git (был закоммичен до `.gitignore`). Любой `git commit -a` может случайно отправить секреты в репо — нужно сделать `git rm --cached .env` и закоммитить (вне scope этой задачи; решение пользователя).
+- `.env.example` не должен содержать реальные ключи или chat id; секреты держатся только в локальных `.env` / `.env.local`.
 - Поля `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` зарезервированы под будущий мульти-провайдер (DeepSeek/OpenAI-compatible), сейчас не используются `LLMNormalizer` (он хардкодит GigaChat).

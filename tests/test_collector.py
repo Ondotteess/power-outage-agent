@@ -36,14 +36,11 @@ class FakeRawStore:
     seen_hashes: set[str] = field(default_factory=set)
     saved: list[tuple[RawRecordSchema, UUID | None]] = field(default_factory=list)
 
-    async def exists_by_hash(self, content_hash: str) -> bool:
-        return content_hash in self.seen_hashes
-
     async def get_id_by_hash(self, content_hash: str) -> UUID | None:
         for raw, _source_id in self.saved:
             if raw.content_hash == content_hash:
                 return raw.id
-        return None
+        return uuid4() if content_hash in self.seen_hashes else None
 
     async def save(self, raw: RawRecordSchema, source_id: UUID | None) -> None:
         self.saved.append((raw, source_id))

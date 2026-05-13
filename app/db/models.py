@@ -152,6 +152,25 @@ class OfficeImpact(Base):
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint("office_id", "event_id", "channel", name="uq_notifications_delivery"),
+        Index("ix_notifications_emitted_at", "emitted_at"),
+        Index("ix_notifications_event_id", "event_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    office_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("offices.id"))
+    event_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("normalized_events.event_id"))
+    channel: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32))
+    severity: Mapped[str] = mapped_column(String(20))
+    summary: Mapped[str] = mapped_column(Text)
+    trace_id: Mapped[UUID] = mapped_column(Uuid)
+    emitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class TaskRecord(Base):
     __tablename__ = "tasks"
 

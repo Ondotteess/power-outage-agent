@@ -50,11 +50,13 @@ class CollectorHandler:
         raw_store: RawStore,
         source_store: SourceStore | None = None,
         collectors: dict[str, BaseCollector] | None = None,
+        parser_profile_override: dict | None = None,
     ) -> None:
         self._submit = submit
         self._raw_store = raw_store
         self._source_store = source_store
         self._collectors = collectors if collectors is not None else default_collectors()
+        self._parser_profile_override = parser_profile_override or {}
 
     async def handle(self, task: Task) -> None:
         source_type = task.payload.get("source_type", SourceType.HTML)
@@ -98,9 +100,12 @@ class CollectorHandler:
 
     async def _load_parser_profile(self, source_id: UUID | None) -> dict:
         if source_id is None or self._source_store is None:
-            return {}
+            return dict(self._parser_profile_override)
         source = await self._source_store.get_by_id(source_id)
-        return source.parser_profile if source is not None else {}
+        parser_profile = source.parser_profile if source is not None else {}
+        if self._parser_profile_override:
+            parser_profile = {**parser_profile, **self._parser_profile_override}
+        return parser_profile
 
     def _build_urls(self, base_url: str, parser_profile: dict) -> list[str]:
         url_with_dates = self._apply_date_params(base_url, parser_profile)
@@ -161,7 +166,8 @@ class CollectorHandler:
             task.trace_id,
         )
 
-        if await self._raw_store.exists_by_hash(raw.content_hash):
+        existing_raw_id = await self._raw_store.get_id_by_hash(raw.content_hash)
+        if existing_raw_id is not None:
             logger.info(
                 "Collector  duplicate skipped  content_hash=%s  url=%s  trace=%s",
                 raw.content_hash,
@@ -169,14 +175,12 @@ class CollectorHandler:
                 task.trace_id,
             )
             if reparse_duplicate:
-                existing_raw_id = await self._raw_store.get_id_by_hash(raw.content_hash)
-                if existing_raw_id is not None:
-                    logger.info(
-                        "Collector  duplicate reparse requested  raw_id=%s  trace=%s",
-                        existing_raw_id,
-                        task.trace_id,
-                    )
-                    await self._submit_parse(existing_raw_id, task.trace_id)
+                logger.info(
+                    "Collector  duplicate reparse requested  raw_id=%s  trace=%s",
+                    existing_raw_id,
+                    task.trace_id,
+                )
+                await self._submit_parse(existing_raw_id, task.trace_id)
             return
 
         await self._raw_store.save(raw, source_id=source_id)

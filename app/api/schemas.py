@@ -100,6 +100,18 @@ class OfficeImpactOut(BaseModel):
     detected_at: datetime
 
 
+class NotificationOut(BaseModel):
+    id: UUID
+    office_id: UUID
+    office_name: str
+    event_id: UUID
+    channel: str
+    status: str
+    severity: str
+    emitted_at: datetime
+    summary: str
+
+
 # ── Tasks / DLQ ────────────────────────────────────────────────────────────
 
 

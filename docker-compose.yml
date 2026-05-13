@@ -29,5 +29,66 @@ services:
     volumes:
       - ./data:/app/data
 
+  api:
+    profiles: ["demo"]
+    build: .
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/outage_agent
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    command: ["python", "-m", "uvicorn", "app.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  web:
+    profiles: ["demo"]
+    image: node:24-alpine
+    working_dir: /web
+    environment:
+      VITE_USE_MOCK: "0"
+      VITE_API_PROXY_TARGET: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./web:/web
+      - web_node_modules:/web/node_modules
+    command: ["sh", "-c", "npm ci && npm run dev -- --host 0.0.0.0"]
+
+  demo-runner:
+    profiles: ["demo"]
+    build: .
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/outage_agent
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    command:
+      [
+        "python",
+        "-m",
+        "app.main",
+        "--demo-e2e",
+        "--demo-records-per-source",
+        "5",
+        "--demo-step-delay",
+        "0.75",
+        "--log-level",
+        "INFO",
+      ]
+
 volumes:
   postgres_data:
+  web_node_modules:

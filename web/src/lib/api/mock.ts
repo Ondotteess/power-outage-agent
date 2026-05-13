@@ -472,6 +472,4 @@ export const mockClient: ApiClient = {
   },
 };
 
-// helpers exported so the "real" client can borrow mock fallbacks for endpoints
-// that aren't on the backend yet (offices, notifications, logs).
-export const mockHelpers = { OFFICES, OFFICE_IMPACTS, NOTIFICATIONS, LOGS };
+export const mockLogs = LOGS;
