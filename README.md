@@ -36,6 +36,14 @@ docker compose --profile demo up --build db api web demo-runner
 # api: http://localhost:8000/docs
 ```
 
+Если терминал можно случайно закрыть, поднимайте долгоживущие сервисы detached,
+а demo-runner запускайте отдельно:
+
+```bash
+docker compose --profile demo up --build -d db api web
+docker compose --profile demo run --rm demo-runner
+```
+
 Demo-runner берёт по 5 локальных demo-записей на каждый активный источник и прогоняет
 весь pipeline без внешних сайтов и LLM-ключей:
 
@@ -52,31 +60,28 @@ office impacts и notifications читаются из FastAPI.
 VITE_USE_MOCK=0
 ```
 
-### Office threat map
+### Карта офисов и угроз
 
-The admin UI has an office map at `http://localhost:5173/map`. It reads
-`GET /api/map/offices` when `VITE_USE_MOCK=0`, or mock data in the default
-frontend-only mode.
+В admin UI есть карта офисов: `http://localhost:5173/map`. При `VITE_USE_MOCK=0`
+она читает `GET /api/map/offices`, в frontend-only режиме использует mock-данные.
 
-Office coordinates are stored manually on the office record:
+Координаты хранятся вручную в записи офиса:
 
 - `latitude`
 - `longitude`
 
-There is no automatic geocoding and no Google/Yandex map API integration. If an
-office has no coordinates, the map skips its marker and shows it in the
-"Missing coordinates" list.
+Автоматического геокодинга нет: проект не подключает Google/Yandex Maps API,
+не требует API-ключей и не ходит во внешний геокодинг. Если у офиса нет координат,
+маркер пропускается, а офис попадает в список `Missing coordinates`.
 
-Marker colors:
+Цвета маркеров:
 
-- green: `ok`, no active impacts
-- yellow: `risk`, active low/medium/unknown impact
-- red: `critical`, active high/critical impact or an event that clearly means
-  outage/closure
+- зелёный: `ok`, активных impacts нет
+- жёлтый: `risk`, есть активный low/medium/unknown impact
+- красный: `critical`, есть active high/critical impact или событие явно означает outage/closure
 
-The map page includes local filters for status, severity, problematic offices,
-and search by office name/address/city/region. Use the `Refresh` button to
-reload from the API.
+На странице есть локальные фильтры по status, severity, проблемным офисам и поиск
+по названию/адресу/городу/региону. Кнопка `Refresh` перечитывает данные из API.
 
 В dev-режиме Vite проксирует `/api/*` на `http://localhost:8000`. Для продакшен-сборки (`npm run build`) выкладывайте `web/dist/` за тем же origin, что и FastAPI, либо настройте reverse proxy.
 

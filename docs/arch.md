@@ -18,6 +18,17 @@ flowchart LR
     Dispatcher --> NormalizationHandler
     NormalizationHandler --> LLMNormalizer
     LLMNormalizer --> NormalizedEventStore[(normalized_events)]
+    NormalizationHandler -->|DEDUPLICATE_EVENT| Dispatcher
+    Dispatcher --> DeduplicationHandler
+    DeduplicationHandler -->|MATCH_OFFICES| Dispatcher
+    Dispatcher --> OfficeMatchHandler
+    OfficeMatchHandler --> OfficeImpactStore[(office_impacts)]
+    OfficeMatchHandler -->|EMIT_EVENT| Dispatcher
+    Dispatcher --> NotificationHandler
+    NotificationHandler --> NotificationStore[(notifications)]
+    AdminAPI[FastAPI Admin API] --> OfficeStore[(offices)]
+    AdminAPI --> OfficeImpactStore
+    WebUI[Vite React Admin UI] -->|/api/map/offices| AdminAPI
 ```
 
 ## Основные решения
@@ -81,11 +92,54 @@ Transport-уровень (HTTP 5xx, network, OAuth failure) — бросаетс
 
 LLM-уровень — невалидный JSON, нарушение схемы, отсутствующий `start_time` — `LLMNormalizer` возвращает `None`. `NormalizationHandler` пропускает запись без записи в `normalized_events`. Не ретраим — модель в следующей попытке скорее всего отдаст тот же мусор.
 
+### 7. Офисы имеют ручные координаты
+
+`Office` хранит `latitude` / `longitude` как nullable поля. Координаты задаются
+вручную в seed/БД; автоматический геокодинг намеренно не используется, чтобы не
+тащить API-ключи, лимиты и платные карты в MVP.
+
+Офис без координат остаётся валидной записью:
+
+- matcher и уведомления продолжают работать по адресу;
+- `GET /api/map/offices` возвращает такой офис;
+- frontend не рисует маркер и показывает офис в списке `Missing coordinates`.
+
+### 8. Карта — UI-проекция, а не гео-платформа
+
+Карта офисов реализована как отдельная страница `/map` в существующем Vite/React
+admin UI. Используется Leaflet напрямую, без нового frontend-фреймворка и без
+Google/Yandex Maps API. Leaflet загружается lazy только для route `/map`, чтобы
+не утяжелять стартовый dashboard.
+
+Endpoint `GET /api/map/offices` отдаёт готовую UI-проекцию:
+
+- офис;
+- координаты;
+- текущий статус `ok | risk | critical`;
+- список активных impacts.
+
+Фильтрация остаётся локальной на фронтенде: данных мало, backend query language
+для карты не нужен.
+
+### 9. Статус карты считается от активных impacts
+
+Активный impact:
+
+- `impact_start <= now`;
+- `impact_end IS NULL OR impact_end >= now`.
+
+Статусы:
+
+- `ok` — активных impacts нет;
+- `risk` — есть low/medium/unknown active impact;
+- `critical` — есть high/critical active impact или нормализованное событие явно
+  похоже на outage/closure.
+
 ## Следующие архитектурные шаги
 
-1. Dedup нормализованных событий по `location_normalized + start_time + end_time`.
-2. Office Matcher и модель офисов.
-3. Idempotency для `normalized_events` по `parsed_record_id` или композитному ключу.
-4. Batch/rate-limit слой для LLM.
-5. Alembic-миграции вместо `Base.metadata.create_all`.
-6. Re-enqueue pending/running задач после перезапуска.
+1. Калибровать dedup нормализованных событий на реальных дублях.
+2. Расширить Office Matcher за пределы MVP-эвристик.
+3. Batch/rate-limit слой для LLM.
+4. Alembic-миграции вместо `Base.metadata.create_all`.
+5. Re-enqueue pending/running задач после перезапуска.
+6. Persistent queue-depth time series для dashboard.

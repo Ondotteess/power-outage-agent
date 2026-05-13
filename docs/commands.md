@@ -33,6 +33,21 @@ docker compose --profile demo up --build db api web demo-runner
 Demo-режим не ходит во внешние сайты и не требует GigaChat credentials. Обычный smoke
 с реальным LLM остаётся отдельной командой ниже.
 
+Если терминал часто закрывается случайно, удобнее поднять долгоживущие сервисы detached,
+а demo-runner запустить отдельной одноразовой командой:
+
+```bash
+docker compose --profile demo up --build -d db api web
+docker compose --profile demo run --rm demo-runner
+```
+
+После этого:
+
+- web UI: `http://localhost:5173`
+- карта офисов: `http://localhost:5173/map`
+- FastAPI docs: `http://localhost:8000/docs`
+- map API: `http://localhost:8000/api/map/offices`
+
 ```bash
 # Поднять только Postgres
 docker compose up db -d
@@ -170,6 +185,20 @@ FROM office_impacts i
 JOIN offices o ON o.id = i.office_id
 ORDER BY i.detected_at DESC
 LIMIT 20;
+
+-- Офисы и ручные координаты для карты
+SELECT name, city, address, latitude, longitude
+FROM offices
+ORDER BY name;
+
+-- Активные impacts, которые влияют на /map прямо сейчас
+SELECT o.name, i.impact_level, i.impact_start, i.impact_end, e.event_type, e.reason
+FROM office_impacts i
+JOIN offices o ON o.id = i.office_id
+LEFT JOIN normalized_events e ON e.event_id = i.event_id
+WHERE i.impact_start <= now()
+  AND (i.impact_end IS NULL OR i.impact_end >= now())
+ORDER BY i.impact_start DESC;
 
 -- Очистить хвост LLM-задач после неудачного тестового запуска
 DELETE FROM tasks WHERE task_type = 'normalize_event';
