@@ -112,7 +112,9 @@ class ParseHandler:
         )
 
         if records:
-            await self._parsed_store.save_many(records)
+            persisted_records = await self._parsed_store.save_many(records)
+            if persisted_records is not None:
+                records = persisted_records
 
         if not self._llm_normalization_enabled:
             logger.info(
@@ -192,9 +194,16 @@ def _effective_normalize_limit(
 ) -> int | None:
     limits: list[int] = []
     if source_limit is not None:
-        limits.append(max(0, int(source_limit)))
+        limits.append(_safe_non_negative_int(source_limit))
     if global_limit is not None:
-        limits.append(max(0, int(global_limit)))
+        limits.append(_safe_non_negative_int(global_limit))
     if not limits:
         return None
     return min(limits)
+
+
+def _safe_non_negative_int(value: object) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0

@@ -46,7 +46,7 @@ class RossetiTomskParser:
 
         rows = table.find_all("tr")
         date_filter_days = int(parser_profile.get("date_filter_days", 4))
-        today = date.today()
+        today = datetime.now(_DEFAULT_TZ).date()
         cutoff = today + timedelta(days=date_filter_days)
         now_utc = datetime.now(UTC)
 
@@ -156,6 +156,8 @@ def _parse_time_range(event_date: date, time_str: str) -> tuple[datetime | None,
     base = datetime.combine(event_date, datetime.min.time()).replace(tzinfo=_DEFAULT_TZ)
     start = base.replace(hour=sh, minute=sm).astimezone(UTC)
     end = base.replace(hour=eh, minute=em).astimezone(UTC)
+    if end < start:
+        end = (base + timedelta(days=1)).replace(hour=eh, minute=em).astimezone(UTC)
     return start, end
 
 

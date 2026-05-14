@@ -57,7 +57,7 @@ class EsetiParser:
             return []
 
         date_filter_days = int(parser_profile.get("date_filter_days", 4))
-        today = date.today()
+        today = datetime.now(_DEFAULT_TZ).date()
         cutoff = today + timedelta(days=date_filter_days)
         now_utc = datetime.now(UTC)
 
