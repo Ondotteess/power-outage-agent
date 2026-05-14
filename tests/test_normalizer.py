@@ -50,10 +50,16 @@ class FakeParsedStore:
 @dataclass
 class FakeNormalizedStore:
     saved: list[tuple[NormalizedEventSchema, UUID]] = field(default_factory=list)
+    cached: NormalizedEventSchema | None = None
 
     async def save(self, event: NormalizedEventSchema, trace_id: UUID) -> UUID:
         self.saved.append((event, trace_id))
         return event.event_id
+
+    async def get_by_parsed_record_id(self, parsed_id: UUID):
+        if self.cached is not None and self.cached.parsed_record_id == parsed_id:
+            return self.cached
+        return None
 
 
 @dataclass
@@ -134,6 +140,25 @@ async def test_normalization_handler_skips_when_llm_returns_none():
     await handler.handle(_task(parsed.id))
 
     assert store.saved == []
+
+
+async def test_normalization_handler_reuses_cached_normalized_event():
+    parsed = FakeParsedRecord()
+    cached = _event(parsed.id, parsed.raw_record_id)
+    store = FakeNormalizedStore(cached=cached)
+    normalizer = FakeNormalizer(_event(parsed.id, parsed.raw_record_id))
+    submitted: list[Task] = []
+
+    async def submit(task: Task) -> None:
+        submitted.append(task)
+
+    handler = NormalizationHandler(FakeParsedStore(parsed), store, normalizer, submit)
+    await handler.handle(_task(parsed.id))
+
+    assert normalizer.seen == []
+    assert store.saved == []
+    assert len(submitted) == 1
+    assert submitted[0].payload == {"event_id": str(cached.event_id)}
 
 
 def test_build_event_uses_llm_address_and_clamps_confidence():

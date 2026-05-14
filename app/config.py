@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # paid model calls by accident.
     llm_normalization_enabled: bool = False
     llm_normalization_max_per_raw: int = 5
+    llm_normalization_rate_per_minute: int = 30
     # Confidence threshold for the deterministic Token-FSA normalizer. Below
     # this score the FallbackNormalizer escalates to the LLM. 1.0 disables the
     # automaton path entirely; 0.0 disables the LLM fallback.
@@ -43,6 +44,8 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+
+    cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     log_level: str = "INFO"
 

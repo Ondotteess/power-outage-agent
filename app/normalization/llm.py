@@ -12,10 +12,12 @@ underlying provider later is a one-class change.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 import time
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -92,9 +94,15 @@ class LLMNormalizer:
         client: GigaChatClient | None = None,
         *,
         call_store: LLMCallStoreProtocol | None = None,
+        rate_limit_per_minute: int | None = None,
     ) -> None:
         self._client = client
         self._call_store = call_store
+        self._rate_limiter = AsyncRateLimiter(
+            rate_limit_per_minute
+            if rate_limit_per_minute is not None
+            else settings.llm_normalization_rate_per_minute
+        )
 
     def _get_client(self) -> GigaChatClient:
         if self._client is None:
@@ -158,6 +166,7 @@ class LLMNormalizer:
         started = time.perf_counter()
         response: dict | None = None
         try:
+            await self._rate_limiter.wait()
             response = await client.chat_completion(
                 messages=[
                     {"role": "system", "content": _SYSTEM_PROMPT},
@@ -242,6 +251,31 @@ class LLMNormalizer:
             return None
 
         return _build_event(record, data)
+
+
+class AsyncRateLimiter:
+    """Tiny process-local sliding-window limiter for paid LLM calls."""
+
+    def __init__(self, max_calls_per_minute: int) -> None:
+        self._max_calls = max(0, max_calls_per_minute)
+        self._calls: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def wait(self) -> None:
+        if self._max_calls <= 0:
+            return
+
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                cutoff = now - 60.0
+                while self._calls and self._calls[0] <= cutoff:
+                    self._calls.popleft()
+                if len(self._calls) < self._max_calls:
+                    self._calls.append(now)
+                    return
+                sleep_for = max(0.05, 60.0 - (now - self._calls[0]))
+            await asyncio.sleep(sleep_for)
 
 
 def _record_payload(record: ParsedRecordSchema) -> dict[str, Any]:
