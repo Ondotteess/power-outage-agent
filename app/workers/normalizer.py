@@ -63,6 +63,25 @@ class NormalizationHandler:
             raise ValueError(f"ParsedRecord not found: {parsed_id}")
 
         schema = _to_schema(parsed)
+        cached = await self._cached_event(parsed_id)
+        if cached is not None:
+            await self._add_cached_sources(cached.event_id, [schema.raw_record_id], task.trace_id)
+            logger.info(
+                "NormalizationHandler  cache hit  parsed_id=%s  event_id=%s  trace=%s",
+                parsed_id,
+                cached.event_id,
+                task.trace_id,
+            )
+            if self._submit is not None:
+                await self._submit(
+                    Task(
+                        task_type=TaskType.DEDUPLICATE_EVENT,
+                        payload={"event_id": str(cached.event_id)},
+                        trace_id=task.trace_id,
+                    )
+                )
+            return
+
         normalized = await self._normalizer.normalize(schema)
         # Surface which normalizer path produced (or failed) — the Metrics
         # page uses this to show automaton-vs-LLM hit ratio.
@@ -97,6 +116,18 @@ class NormalizationHandler:
                     trace_id=task.trace_id,
                 )
             )
+
+    async def _cached_event(self, parsed_id: UUID):
+        getter = getattr(self._normalized_store, "get_by_parsed_record_id", None)
+        if getter is None:
+            return None
+        return await getter(parsed_id)
+
+    async def _add_cached_sources(self, event_id: UUID, sources: list[UUID], trace_id: UUID) -> None:
+        updater = getattr(self._normalized_store, "add_sources", None)
+        if updater is None:
+            return
+        await updater(event_id, sources, trace_id)
 
 
 def _to_schema(record) -> ParsedRecordSchema:
