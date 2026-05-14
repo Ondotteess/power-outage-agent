@@ -92,6 +92,43 @@ async def last_fetch_per_source(session: AsyncSession) -> dict[UUID, datetime]:
     return {row[0]: row[1] for row in result.all() if row[0] is not None}
 
 
+async def silent_sources(
+    session: AsyncSession,
+    *,
+    multiplier: float = 3.0,
+    now: datetime | None = None,
+) -> list[dict]:
+    """Return active sources whose most recent RawRecord is older than
+    `multiplier × poll_interval_seconds` (or which have never produced one).
+
+    Used by the ParserHealthWatchdog — a source that stops emitting is
+    almost always a parser breakage (selector drift / API contract change),
+    and the DLQ alone doesn't surface it because fetches still "succeed"
+    structurally, just yield zero records.
+    """
+    when = now or datetime.now(UTC)
+    result = await session.execute(select(Source).where(Source.is_active.is_(True)))
+    sources = list(result.scalars().all())
+
+    raw_fetch = await last_fetch_per_source(session)
+    silent: list[dict] = []
+    for source in sources:
+        threshold = timedelta(seconds=source.poll_interval_seconds * multiplier)
+        last = raw_fetch.get(source.id)
+        if last is None or (when - last) > threshold:
+            silent.append(
+                {
+                    "id": source.id,
+                    "name": source.name,
+                    "url": source.url,
+                    "poll_interval_seconds": source.poll_interval_seconds,
+                    "last_fetched_at": last,
+                    "silent_for_seconds": int((when - last).total_seconds()) if last else None,
+                }
+            )
+    return silent
+
+
 async def source_success_rates(session: AsyncSession, since: datetime) -> dict[UUID, float]:
     result = await session.execute(
         select(TaskRecord.payload, TaskRecord.status)

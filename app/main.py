@@ -39,6 +39,7 @@ from app.workers.normalizer import NormalizationHandler
 from app.workers.notifier import NotificationHandler
 from app.workers.observability import QueueSnapshotter
 from app.workers.parser import ParseHandler
+from app.workers.parser_health import ParserHealthWatchdog
 from app.workers.queue import DatabaseTaskQueue, Task, TaskType
 from app.workers.requests import RequestWatcher
 from app.workers.scheduler import Scheduler, SourceConfig
@@ -489,11 +490,27 @@ async def main() -> None:
         retry_requests=retry_request_store,
     )
     queue_snapshotter = QueueSnapshotter(queue_snapshot_store)
+
+    async def _silent_query(*, multiplier: float) -> list[dict]:
+        async with async_session_factory() as session:
+            from app.api import queries as _queries  # local: avoid api->main import cycle
+
+            return await _queries.silent_sources(session, multiplier=multiplier)
+
+    parser_health = ParserHealthWatchdog(
+        _silent_query,
+        event_log_store,
+        alert_sender=_build_telegram_sender(),
+        check_interval_seconds=settings.parser_health_check_interval_seconds,
+        silent_multiplier=settings.parser_health_silent_multiplier,
+    )
+
     await asyncio.gather(
         scheduler.run(),
         dispatcher.run(),
         request_watcher.run(),
         queue_snapshotter.run(),
+        parser_health.run(),
     )
 
 

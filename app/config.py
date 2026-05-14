@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     # in production set to a non-empty value and pass via X-Import-Token.
     office_import_token: str = ""
 
+    # Parser health watchdog. A source is considered "silent" once it has not
+    # produced a new RawRecord for `parser_health_silent_multiplier ×
+    # poll_interval_seconds`. Check cadence is process-wide.
+    parser_health_check_interval_seconds: float = 300.0
+    parser_health_silent_multiplier: float = 3.0
+
     log_level: str = "INFO"
 
 
