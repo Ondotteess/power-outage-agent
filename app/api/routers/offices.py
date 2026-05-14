@@ -45,6 +45,7 @@ async def list_office_impacts(
             impact_level=impact.impact_level,
             match_strategy=impact.match_strategy,
             match_score=impact.match_score,
+            match_explanation=impact.match_explanation or [],
             detected_at=impact.detected_at,
         )
         for impact, office in rows

@@ -127,6 +127,18 @@ export interface ActivityEvent {
   at: string;
 }
 
+export interface EventLog {
+  id: string;
+  event_type: string;
+  severity: LogLine["level"];
+  message: string;
+  source: string | null;
+  task_id: string | null;
+  trace_id: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface NormalizationQuality {
   average_confidence: number;
   normalized_count: number;
@@ -235,6 +247,7 @@ export interface OfficeImpact {
   impact_level: "low" | "medium" | "high";
   match_strategy: string;
   match_score?: number;
+  match_explanation: string[];
   detected_at: string;
 }
 
@@ -248,6 +261,9 @@ export interface MapOfficeImpact {
   starts_at: string;
   ends_at: string | null;
   event_type: string | null;
+  match_strategy: string | null;
+  match_score: number | null;
+  match_explanation: string[];
 }
 
 export interface MapOffice {

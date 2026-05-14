@@ -232,23 +232,27 @@ async def normalization_quality(
 
 
 @router.get("/queue-backlog", response_model=list[QueueBacklogPoint])
-async def queue_backlog() -> list[QueueBacklogPoint]:
-    """24h queue backlog samples.
-
-    Mocked for now — we don't persist queue depth over time. Returns synthetic
-    but stable shape so the UI's chart works. Replace with real Prometheus /
-    timeseries source later.
-    """
+async def queue_backlog(session: SessionDep) -> list[QueueBacklogPoint]:
+    """24h queue backlog samples from persisted snapshots."""
     now = datetime.now(UTC)
-    points: list[QueueBacklogPoint] = []
-    base = [4, 6, 9, 7, 5, 4, 3, 3, 5, 8, 11, 14, 12, 9, 7, 6, 5, 4, 4, 5, 6, 5, 4, 3]
-    for i, val in enumerate(base):
-        points.append(
+    snapshots = await queries.list_queue_depth_snapshots(session, since=now - timedelta(hours=24))
+    if snapshots:
+        return [
             QueueBacklogPoint(
-                at=now - timedelta(hours=23 - i),
-                pending=val,
-                running=max(0, val // 3),
-                failed=max(0, val // 7),
+                at=snapshot.created_at,
+                pending=snapshot.pending,
+                running=snapshot.running,
+                failed=snapshot.failed,
             )
+            for snapshot in snapshots
+        ]
+
+    counts = await queries.count_tasks_by_status(session)
+    return [
+        QueueBacklogPoint(
+            at=now,
+            pending=counts.get("pending", 0),
+            running=counts.get("running", 0),
+            failed=counts.get("failed", 0),
         )
-    return points
+    ]

@@ -17,6 +17,7 @@ def _build_source_out(
     src,
     last_fetch_map: dict,
     counts_map: dict,
+    success_rate_map: dict,
 ) -> SourceOut:
     profile = src.parser_profile or {}
     last_fetch = last_fetch_map.get(src.id)
@@ -41,9 +42,9 @@ def _build_source_out(
         parser_profile=profile,
         last_fetch=last_fetch,
         records_in_window=records_in_window,
-        success_rate=None,
+        success_rate=success_rate_map.get(src.id),
         status=status,
-        region=profile.get("region", "RU-KEM"),
+        region=profile.get("region"),
         parser=profile.get("parser"),
     )
 
@@ -53,7 +54,8 @@ async def list_sources(session: SessionDep) -> list[SourceOut]:
     sources = await queries.list_sources(session)
     last_fetch_map = await queries.last_fetch_per_source(session)
     counts_map = await queries.count_raw_per_source_since(session, queries.utc_window(24))
-    return [_build_source_out(s, last_fetch_map, counts_map) for s in sources]
+    success_rate_map = await queries.source_success_rates(session, queries.utc_window(24))
+    return [_build_source_out(s, last_fetch_map, counts_map, success_rate_map) for s in sources]
 
 
 @router.get("/{source_id}", response_model=SourceOut)
@@ -63,7 +65,8 @@ async def get_source(source_id: UUID, session: SessionDep) -> SourceOut:
         raise HTTPException(status_code=404, detail="source not found")
     last_fetch_map = await queries.last_fetch_per_source(session)
     counts_map = await queries.count_raw_per_source_since(session, queries.utc_window(24))
-    return _build_source_out(src, last_fetch_map, counts_map)
+    success_rate_map = await queries.source_success_rates(session, queries.utc_window(24))
+    return _build_source_out(src, last_fetch_map, counts_map, success_rate_map)
 
 
 @router.post("/{source_id}/poll", response_model=ActionResponse, status_code=202)
@@ -72,7 +75,7 @@ async def poll_source(source_id: UUID, session: SessionDep) -> ActionResponse:
 
     The admin API runs in a separate process from the pipeline worker, so this
     endpoint writes a DB-backed request. The pipeline's RequestWatcher claims it
-    and enqueues the actual FETCH_SOURCE task in its in-memory queue.
+    and submits the actual FETCH_SOURCE task into the durable task queue.
     """
     src = await queries.get_source(session, source_id)
     if not src:

@@ -32,7 +32,7 @@ async def list_tasks(
             trace_id=r.trace_id,
             created_at=r.created_at,
             updated_at=r.updated_at,
-            next_retry_at=None,
+            next_retry_at=r.next_run_at if r.status == "pending" and r.attempt > 0 else None,
             source_id=r.payload.get("source_id") if isinstance(r.payload, dict) else None,
         )
         for r in rows

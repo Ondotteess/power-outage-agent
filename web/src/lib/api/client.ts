@@ -50,7 +50,6 @@ export interface ApiClient {
   listOfficeImpacts(): Promise<OfficeImpact[]>;
   getMapOffices(): Promise<MapOfficesResponse>;
 
-  // Logs still use mock data in the real client.
   listNotifications(): Promise<Notification[]>;
   listLogs(): Promise<LogLine[]>;
 }

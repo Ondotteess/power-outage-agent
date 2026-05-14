@@ -6,6 +6,10 @@
 
 ### Pipeline (как было)
 
+Copy `.env.example` to `.env` and set `POSTGRES_PASSWORD` before starting Compose.
+Postgres is not published to the host by default; add a local override only for
+developer tools that must connect from outside the Compose network.
+
 ```bash
 docker compose up db -d
 python -m app.main
@@ -51,6 +55,10 @@ Demo-runner пересобирает демо-реестр из 50 офисов 
 ```text
 FETCH_SOURCE → PARSE_CONTENT → NORMALIZE_EVENT → DEDUPLICATE_EVENT → MATCH_OFFICES → EMIT_EVENT
 ```
+
+Runtime pipeline теперь использует durable queue в PostgreSQL (`tasks`): pending/running задачи
+переживают рестарт процесса, retry хранит `next_run_at`, а worker claim-ит задачи атомарно.
+In-memory очередь оставлена только для быстрых unit-тестов dispatcher-а.
 
 В UI переключатель уже задан через `VITE_USE_MOCK=0`, поэтому dashboard, pipeline,
 office impacts и notifications читаются из FastAPI.
@@ -124,11 +132,11 @@ web/
 | Sources / Raw / Parsed / Normalized / Tasks / DLQ | реальный (`/api/...`) |
 | Activity feed | реальный (синтезируется из RAW+Parsed+Normalized+failed Tasks) |
 | Normalization quality | реальный (`/api/dashboard/normalization-quality`) |
-| Queue backlog 24h | **mock** (нет персистентности глубины очереди) |
+| Queue backlog 24h | реальный (`/api/dashboard/queue-backlog`, snapshots from `queue_depth_snapshots`) |
 | Office matcher / Office impacts | реальный (`/api/offices`, `/api/office-impacts`) |
 | Office threat map | реальный (`/api/map/offices`) |
 | Notifications | реальный (`/api/notifications`) |
-| Logs tail | **mock** (логи не агрегируются в БД) |
+| Logs tail | реальный (`/api/logs`, structured rows from `event_logs`) |
 | Action `Run poll now` / `Retry` | реальный DB-backed IPC: API пишет request, pipeline-worker enqueue-ит задачу |
 
 ### Желательные следующие backend-эндпоинты
@@ -136,6 +144,7 @@ web/
 - Реальные office registry endpoints (Week 3).
 - Persistent queue-depth time series (минимально — periodic снапшот в БД).
 - Лог-стрим — например, через journald/loki, либо отдельная таблица `events` со структурированной записью этапов.
+- Quality loop нормализации: `python -m app.tools.evaluate_quality`, fixture-кейсы в `docs/quality/normalization_cases.json`.
 
 
 ## План на 4 недели

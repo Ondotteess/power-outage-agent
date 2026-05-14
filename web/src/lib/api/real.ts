@@ -1,10 +1,8 @@
 /**
  * Real backend client — talks to FastAPI at /api/*.
- * Logs fall back to mock data until the backend exposes a log stream.
  */
 import type { ApiClient } from "./client";
-import { mockLogs } from "./mock";
-import type { ListParams, Office, OfficeImpact } from "./types";
+import type { EventLog, ListParams, LogLine, Office, OfficeImpact } from "./types";
 
 const BASE = "/api";
 
@@ -62,6 +60,12 @@ export const realClient: ApiClient = {
   getMapOffices: () => get("/map/offices"),
   listNotifications: () => get("/notifications"),
   async listLogs() {
-    return mockLogs;
+    const rows = await get<EventLog[]>("/logs", { limit: 200 });
+    return rows.map((row) => ({
+      ts: row.created_at,
+      level: row.severity as LogLine["level"],
+      logger: row.source ?? row.event_type,
+      message: row.message,
+    }));
   },
 };

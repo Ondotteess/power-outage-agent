@@ -63,6 +63,9 @@ def build_map_offices_response(
                     starts_at=impact.impact_start,
                     ends_at=impact.impact_end,
                     event_type=event.event_type if event is not None else None,
+                    match_strategy=impact.match_strategy,
+                    match_score=getattr(impact, "match_score", None),
+                    match_explanation=getattr(impact, "match_explanation", None) or [],
                 ),
                 status,
             )

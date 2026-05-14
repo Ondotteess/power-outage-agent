@@ -4,11 +4,12 @@
 
 ## Текущий контур
 
-Power Outage Agent — минимальный event-driven pipeline без внешнего брокера. Все задачи проходят через in-memory `TaskQueue`, а состояние задач пишется в PostgreSQL (`tasks`).
+Power Outage Agent — минимальный event-driven pipeline без внешнего брокера. В unit-тестах остаётся in-memory `TaskQueue`, а runtime pipeline использует DB-backed очередь поверх PostgreSQL (`tasks`): `Dispatcher.submit` пишет pending-row, worker атомарно claim-ит runnable задачи через `FOR UPDATE SKIP LOCKED`.
 
 ```mermaid
 flowchart LR
     Scheduler -->|FETCH_SOURCE| Dispatcher
+    Dispatcher --> Tasks[(tasks durable queue)]
     AdminAPI[FastAPI Admin API] --> PollRequests[(poll_requests)]
     AdminAPI --> RetryRequests[(retry_requests)]
     PollRequests --> RequestWatcher
@@ -38,6 +39,17 @@ flowchart LR
 ```
 
 ## Основные решения
+
+### 0. Очередь задач хранится в БД
+
+Runtime worker использует `DatabaseTaskQueue` поверх `tasks`:
+
+- pending/running/done/failed статусы остаются единым источником правды;
+- claim pending-задач выполняется атомарно;
+- retry хранит `next_run_at`, поэтому backoff переживает процесс;
+- при рестарте pending/running задачи requeue-ятся, а не переводятся в DLQ.
+
+In-memory `TaskQueue` оставлен для быстрых unit-тестов и локальной изоляции dispatcher-логики.
 
 ### 1. Источники управляются через БД
 
@@ -146,6 +158,5 @@ Endpoint `GET /api/map/offices` отдаёт готовую UI-проекцию:
 1. Калибровать dedup нормализованных событий на реальных дублях.
 2. Расширить Office Matcher за пределы MVP-эвристик.
 3. Batch/rate-limit слой для LLM.
-4. Alembic-миграции вместо `Base.metadata.create_all`.
-5. Re-enqueue pending/running задач после перезапуска.
-6. Persistent queue-depth time series для dashboard.
+4. Persistent queue-depth time series для dashboard.
+5. Перенести queue backlog и logs из mock в настоящую event-log/time-series модель.

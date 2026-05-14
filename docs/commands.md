@@ -52,7 +52,7 @@ docker compose exec -T api python -m app.tools.smoke_check --expected-offices 50
 
 Если нужно нажимать в UI `Run poll now` или `Retry`, поднимите ещё и долгоживущий
 pipeline-worker. Admin API только пишет request в БД, а worker забирает его и
-кладёт реальную задачу в in-memory очередь:
+кладёт реальную задачу в durable queue (`tasks`):
 
 ```bash
 docker compose --profile demo up --build -d db app api web
@@ -145,6 +145,21 @@ ruff format .
 # Всё сразу: линт + формат
 ruff check --fix . && ruff format .
 ```
+
+## Quality loop
+
+```bash
+# Проверить fixture-набор нормализации детерминированным automaton-normalizer
+python -m app.tools.evaluate_quality
+
+# Использовать другой набор кейсов
+python -m app.tools.evaluate_quality --cases docs/quality/normalization_cases.json
+```
+
+Fixture-формат лежит в `docs/quality/normalization_cases.json`. Добавляйте туда реальные
+объявления после ручной разметки: `parsed` — вход нормализатора, `expected` — ожидаемый
+`event_type`, `canonical_key` и минимальная confidence. Этот набор должен расти вместе с
+изменениями парсеров/нормализатора.
 
 ## База данных
 
@@ -318,13 +333,11 @@ GIGACHAT_VERIFY_SSL=false
 
 ## Alembic (миграции)
 
-> Пока не настроен — схема создаётся через `Base.metadata.create_all` при старте.
-> `alembic` не входит в текущие runtime-зависимости MVP. Команды ниже — ориентир для будущего шага после добавления зависимости и папки миграций.
+Alembic настроен: конфиг `alembic.ini`, async env `alembic/env.py`, текущая baseline-миграция
+`alembic/versions/20260514_0001_initial.py`. Runtime пока сохраняет dev-friendly
+`Base.metadata.create_all` при старте, но изменения схемы дальше нужно оформлять миграциями.
 
 ```bash
-# Инициализация (один раз)
-alembic init alembic
-
 # Создать миграцию по изменениям моделей
 alembic revision --autogenerate -m "описание"
 

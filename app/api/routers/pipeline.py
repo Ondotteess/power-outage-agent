@@ -37,6 +37,10 @@ def _stage_status(failed: int, running: int, pending: int, done: int) -> str:
 @router.get("/status", response_model=PipelineStatus)
 async def pipeline_status(session: SessionDep) -> PipelineStatus:
     counts = await queries.count_tasks_by_type_status(session)
+    timings = {
+        row["task_type"]: row
+        for row in await queries.stage_timings(session, since=queries.utc_window(24))
+    }
 
     stages: list[PipelineStage] = []
     for key, label, task_type, _ in _STAGES:
@@ -44,6 +48,7 @@ async def pipeline_status(session: SessionDep) -> PipelineStatus:
         running = counts.get((task_type, "running"), 0)
         pending = counts.get((task_type, "pending"), 0)
         done = counts.get((task_type, "done"), 0)
+        timing = timings.get(task_type)
 
         status = _stage_status(failed, running, pending, done)
         # Future stages with no tasks yet — show as "pending" so the UI shows them grey.
@@ -55,9 +60,9 @@ async def pipeline_status(session: SessionDep) -> PipelineStatus:
                 key=key,
                 label=label,
                 status=status,
-                throughput=None,
+                throughput=round(timing["count"] / (24 * 60), 3) if timing else None,
                 queue_size=pending + running,
-                latency_ms=None,
+                latency_ms=float(timing["avg_ms"]) if timing else None,
                 retry_count=failed,
                 metric_label="processed",
                 metric_value=str(done),

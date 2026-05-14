@@ -17,3 +17,6 @@ data/processed/*
 *.tsbuildinfo
 web/node_modules/
 samples
+
+# Stray log files (vite/npm health checks, dev scratch).
+*.log

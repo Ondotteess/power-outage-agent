@@ -24,7 +24,7 @@ export function Logs() {
     <div className="space-y-6">
       <PageHeader
         title="Logs"
-        description="Recent log lines from the pipeline workers. (Currently mock — wire to a real log sink later.)"
+        description="Structured events persisted by the pipeline worker."
         actions={
           <select className="input !h-8 !text-xs" value={level} onChange={(e) => setLevel(e.target.value)}>
             <option value="">All levels</option>
