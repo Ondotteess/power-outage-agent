@@ -186,3 +186,28 @@ class GigaChatClient:
             raise GigaChatInvalidResponseError(
                 f"unexpected chat response shape: {list(response)[:5]}"
             ) from exc
+
+    @staticmethod
+    def extract_usage(response: dict) -> dict[str, int]:
+        """Pull `usage` token counts out of the response, defaulting to zero.
+
+        GigaChat returns OpenAI-style `{prompt_tokens, completion_tokens,
+        total_tokens}`. Missing fields are treated as zero rather than as an
+        error: token tracking is a metrics-only concern and should never break
+        normalization.
+        """
+        usage = response.get("usage") if isinstance(response, dict) else None
+        if not isinstance(usage, dict):
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        prompt = int(usage.get("prompt_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or 0)
+        total = int(usage.get("total_tokens") or (prompt + completion))
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total,
+        }
+
+    @property
+    def model_name(self) -> str:
+        return self._model

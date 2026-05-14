@@ -494,6 +494,60 @@ export const mockClient: ApiClient = {
       failed: Math.max(0, Math.floor(v / 7)),
     }));
   },
+  async getPipelineMetrics(hours = 24) {
+    await wait();
+    return {
+      stage_timings: [
+        { task_type: "FETCH_SOURCE", count: 24, avg_ms: 482, p50_ms: 410, p95_ms: 910, max_ms: 1320 },
+        { task_type: "PARSE_CONTENT", count: 81, avg_ms: 38, p50_ms: 31, p95_ms: 95, max_ms: 210 },
+        { task_type: "NORMALIZE_EVENT", count: 64, avg_ms: 215, p50_ms: 84, p95_ms: 980, max_ms: 1450 },
+        { task_type: "DEDUPLICATE_EVENT", count: 64, avg_ms: 12, p50_ms: 9, p95_ms: 26, max_ms: 41 },
+        { task_type: "MATCH_OFFICES", count: 58, avg_ms: 31, p50_ms: 22, p95_ms: 78, max_ms: 120 },
+        { task_type: "EMIT_EVENT", count: 28, avg_ms: 9, p50_ms: 7, p95_ms: 22, max_ms: 41 },
+      ],
+      llm_cost: {
+        calls_ok: 14,
+        calls_error: 1,
+        prompt_tokens: 8120,
+        completion_tokens: 3260,
+        total_tokens: 11380,
+        avg_duration_ms: 612,
+        max_duration_ms: 1420,
+        prompt_cost_rub: 1.624,
+        completion_cost_rub: 1.956,
+        total_cost_rub: 3.58,
+        prompt_price_per_1k_rub: 0.2,
+        completion_price_per_1k_rub: 0.6,
+      },
+      normalizer_path: { automaton: 50, llm_fallback: 14, none: 0, automaton_pct: 0.781 },
+      recent_llm_calls: [
+        {
+          id: "llm-1",
+          model: "GigaChat-2",
+          prompt_tokens: 612,
+          completion_tokens: 210,
+          total_tokens: 822,
+          duration_ms: 690,
+          status: "ok",
+          cost_rub: 0.25,
+          created_at: new Date(Date.now() - 8 * 60_000).toISOString(),
+        },
+        {
+          id: "llm-2",
+          model: "GigaChat-2",
+          prompt_tokens: 580,
+          completion_tokens: 175,
+          total_tokens: 755,
+          duration_ms: 540,
+          status: "ok",
+          cost_rub: 0.221,
+          created_at: new Date(Date.now() - 21 * 60_000).toISOString(),
+        },
+      ],
+      runtime: { process: "api", rss_mb: 138.4, vms_mb: 412.0, cpu_percent: 1.2 },
+      window_hours: hours,
+    };
+  },
   async listSources() {
     await wait();
     return SOURCES;

@@ -12,6 +12,7 @@ from app.alerts.telegram import TelegramSender
 from app.config import settings
 from app.db.engine import async_session_factory, init_db
 from app.db.repositories import (
+    LLMCallStore,
     NormalizedEventStore,
     NotificationStore,
     OfficeImpactStore,
@@ -301,7 +302,8 @@ async def main() -> None:
     # Two-stage normalizer: deterministic Token-FSA first, GigaChat only on
     # low-confidence parses. Demo mode swaps GigaChat for the offline
     # DemoNormalizer below — same fallback shape, different second stage.
-    fallback_normalizer: object = LLMNormalizer()
+    llm_call_store = LLMCallStore(async_session_factory)
+    fallback_normalizer: object = LLMNormalizer(call_store=llm_call_store)
     demo_step_delay = 0.0
     demo_emit_unmatched = False
     collectors = None
@@ -411,6 +413,7 @@ async def main() -> None:
         normalized_store,
         normalizer,
         dispatcher.submit,
+        task_path_store=task_store,
     )
     dispatcher.register(
         TaskType.NORMALIZE_EVENT,

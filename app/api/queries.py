@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     DedupEvent,
+    LLMCall,
     NormalizedEvent,
     Notification,
     Office,
@@ -273,3 +274,114 @@ def utc_day_start() -> datetime:
 
 def utc_window(hours: int) -> datetime:
     return datetime.now(UTC) - timedelta(hours=hours)
+
+
+# ---------------------------------------------------------------------------
+# Metrics: per-stage timings, LLM cost, normalizer path mix
+# ---------------------------------------------------------------------------
+
+
+async def stage_timings(session: AsyncSession, *, since: datetime | None = None) -> list[dict]:
+    """Per-task-type timing aggregates.
+
+    Computed in Python over the matching rows because the SQL flavours we
+    care about (Postgres + SQLite for tests) disagree on percentile syntax —
+    keeping it portable is cheaper than two query paths. Volumes at MVP are
+    in the thousands per day, well within an in-memory sort.
+    """
+    stmt = (
+        select(TaskRecord.task_type, TaskRecord.duration_ms)
+        .where(TaskRecord.duration_ms.is_not(None))
+        .where(TaskRecord.status.in_(("done", "failed")))
+    )
+    if since is not None:
+        stmt = stmt.where(TaskRecord.completed_at >= since)
+    result = await session.execute(stmt)
+
+    by_type: dict[str, list[int]] = {}
+    for task_type, duration in result.all():
+        if duration is None:
+            continue
+        by_type.setdefault(str(task_type), []).append(int(duration))
+
+    rows: list[dict] = []
+    for task_type, durations in by_type.items():
+        durations.sort()
+        n = len(durations)
+        rows.append(
+            {
+                "task_type": task_type,
+                "count": n,
+                "avg_ms": int(sum(durations) / n) if n else 0,
+                "p50_ms": _percentile(durations, 0.50),
+                "p95_ms": _percentile(durations, 0.95),
+                "max_ms": durations[-1] if durations else 0,
+            }
+        )
+    rows.sort(key=lambda r: r["task_type"])
+    return rows
+
+
+def _percentile(sorted_values: list[int], pct: float) -> int:
+    if not sorted_values:
+        return 0
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    # Nearest-rank — simple, monotonic, doesn't need numpy.
+    idx = min(len(sorted_values) - 1, max(0, int(round(pct * (len(sorted_values) - 1)))))
+    return sorted_values[idx]
+
+
+async def llm_totals(session: AsyncSession, *, since: datetime | None = None) -> dict:
+    """Aggregate token / call counts for the LLM normalizer.
+
+    Returns raw token sums; the caller multiplies by the configured tariff to
+    get a RUB estimate, so the query stays storage-only and the route stays
+    config-aware.
+    """
+    stmt = select(
+        func.count(LLMCall.id),
+        func.coalesce(func.sum(LLMCall.prompt_tokens), 0),
+        func.coalesce(func.sum(LLMCall.completion_tokens), 0),
+        func.coalesce(func.sum(LLMCall.total_tokens), 0),
+        func.coalesce(func.avg(LLMCall.duration_ms), 0),
+        func.coalesce(func.max(LLMCall.duration_ms), 0),
+    ).where(LLMCall.status == "ok")
+    if since is not None:
+        stmt = stmt.where(LLMCall.created_at >= since)
+    error_stmt = select(func.count(LLMCall.id)).where(LLMCall.status == "error")
+    if since is not None:
+        error_stmt = error_stmt.where(LLMCall.created_at >= since)
+
+    row = (await session.execute(stmt)).one()
+    errors = (await session.execute(error_stmt)).scalar() or 0
+    return {
+        "calls_ok": int(row[0] or 0),
+        "calls_error": int(errors),
+        "prompt_tokens": int(row[1] or 0),
+        "completion_tokens": int(row[2] or 0),
+        "total_tokens": int(row[3] or 0),
+        "avg_duration_ms": int(row[4] or 0),
+        "max_duration_ms": int(row[5] or 0),
+    }
+
+
+async def llm_recent_calls(session: AsyncSession, *, limit: int = 20) -> list[LLMCall]:
+    result = await session.execute(select(LLMCall).order_by(desc(LLMCall.created_at)).limit(limit))
+    return list(result.scalars().all())
+
+
+async def normalizer_path_counts(
+    session: AsyncSession, *, since: datetime | None = None
+) -> dict[str, int]:
+    """Count NORMALIZE_EVENT tasks by which normalizer produced their output."""
+    stmt = (
+        select(TaskRecord.normalizer_path, func.count(TaskRecord.id))
+        .where(TaskRecord.task_type == "NORMALIZE_EVENT")
+        .where(TaskRecord.normalizer_path.is_not(None))
+        .group_by(TaskRecord.normalizer_path)
+    )
+    if since is not None:
+        stmt = stmt.where(TaskRecord.completed_at >= since)
+    result = await session.execute(stmt)
+    return {str(row[0]): int(row[1]) for row in result.all()}

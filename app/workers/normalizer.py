@@ -23,6 +23,10 @@ class NormalizerProtocol(Protocol):
     async def normalize(self, record: ParsedRecordSchema) -> NormalizedEventSchema | None: ...
 
 
+class TaskPathStoreProtocol(Protocol):
+    async def set_normalizer_path(self, task_id: UUID, path: str) -> None: ...
+
+
 class NormalizationHandler:
     """Handles NORMALIZE_EVENT tasks."""
 
@@ -32,11 +36,13 @@ class NormalizationHandler:
         normalized_store: NormalizedEventStoreProtocol,
         normalizer: NormalizerProtocol,
         submit: Callable[[Task], Awaitable[None]] | None = None,
+        task_path_store: TaskPathStoreProtocol | None = None,
     ) -> None:
         self._parsed_store = parsed_store
         self._normalized_store = normalized_store
         self._normalizer = normalizer
         self._submit = submit
+        self._task_path_store = task_path_store
 
     async def handle(self, task: Task) -> None:
         parsed_id = UUID(task.payload["parsed_record_id"])
@@ -58,6 +64,15 @@ class NormalizationHandler:
 
         schema = _to_schema(parsed)
         normalized = await self._normalizer.normalize(schema)
+        # Surface which normalizer path produced (or failed) — the Metrics
+        # page uses this to show automaton-vs-LLM hit ratio.
+        path = getattr(self._normalizer, "last_path", None)
+        if self._task_path_store is not None and path is not None:
+            try:
+                await self._task_path_store.set_normalizer_path(task.task_id, path)
+            except Exception:  # noqa: BLE001 — metrics must never break pipeline
+                logger.exception("NormalizationHandler  failed to persist normalizer_path")
+
         if normalized is None:
             logger.warning(
                 "NormalizationHandler  skipped  parsed_id=%s  trace=%s",

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import (
     DedupEvent,
+    LLMCall,
     NormalizedEvent,
     Notification,
     Office,
@@ -50,20 +51,56 @@ class TaskStore:
             task.attempt,
             error,
         )
-        record = TaskRecord(
-            id=task.task_id,
-            task_type=str(task.task_type),
-            input_hash=task.input_hash,
-            status=status,
-            attempt=task.attempt,
-            payload=task.payload,
-            error=error,
-            trace_id=task.trace_id,
-        )
+        now = datetime.now(UTC)
         async with self._sf() as session:
-            await session.merge(record)
+            existing = await session.get(TaskRecord, task.task_id)
+            if existing is None:
+                record = TaskRecord(
+                    id=task.task_id,
+                    task_type=str(task.task_type),
+                    input_hash=task.input_hash,
+                    status=status,
+                    attempt=task.attempt,
+                    payload=task.payload,
+                    error=error,
+                    trace_id=task.trace_id,
+                )
+                session.add(record)
+            else:
+                existing.status = status
+                existing.attempt = task.attempt
+                existing.payload = task.payload
+                existing.error = error
+                existing.updated_at = now
+                # Per-stage timing. `started_at` is reset on each "running"
+                # transition so retries measure the latest attempt, not the
+                # very first one. `completed_at` + `duration_ms` finalize on
+                # done/failed; duration is the wall time between started_at
+                # and now (excludes queue wait + backoff).
+                if status == "running":
+                    existing.started_at = now
+                    existing.completed_at = None
+                    existing.duration_ms = None
+                elif status in ("done", "failed"):
+                    existing.completed_at = now
+                    if existing.started_at is not None:
+                        existing.duration_ms = int(
+                            (now - existing.started_at).total_seconds() * 1000
+                        )
             await session.commit()
         logger.debug("TaskStore  upsert done  task_id=%s  status=%s", task.task_id, status)
+
+    async def set_normalizer_path(self, task_id: UUID, path: str) -> None:
+        """Record which normalizer (`automaton` or `llm_fallback`) produced the
+        event for a NORMALIZE_EVENT task. Used by the Metrics page to show the
+        FSA-vs-LLM hit ratio without scanning every LLMCall row."""
+        async with self._sf() as session:
+            await session.execute(
+                update(TaskRecord)
+                .where(TaskRecord.id == task_id)
+                .values(normalizer_path=path, updated_at=datetime.now(UTC))
+            )
+            await session.commit()
 
     async def fail_incomplete(self, reason: str) -> int:
         """Mark tasks abandoned by a previous process as failed.
@@ -85,6 +122,40 @@ class TaskStore:
         async with self._sf() as session:
             result = await session.execute(select(TaskRecord).where(TaskRecord.id == task_id))
             return result.scalar_one_or_none()
+
+
+class LLMCallStore:
+    """Writes one row per chat-completion call (success or failure)."""
+
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def record(
+        self,
+        *,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        duration_ms: int,
+        status: str,
+        task_id: UUID | None = None,
+        trace_id: UUID | None = None,
+    ) -> None:
+        async with self._sf() as session:
+            session.add(
+                LLMCall(
+                    model=model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    duration_ms=duration_ms,
+                    status=status,
+                    task_id=task_id,
+                    trace_id=trace_id,
+                )
+            )
+            await session.commit()
 
 
 class RawStore:

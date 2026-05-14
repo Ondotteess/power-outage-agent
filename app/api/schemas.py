@@ -223,3 +223,68 @@ class ActionResponse(BaseModel):
     message: str
     task_id: UUID | None = None
     request_id: UUID | None = None
+
+
+# ── Metrics ────────────────────────────────────────────────────────────────
+
+
+class StageTimingOut(BaseModel):
+    task_type: str
+    count: int
+    avg_ms: int
+    p50_ms: int
+    p95_ms: int
+    max_ms: int
+
+
+class LLMCallOut(BaseModel):
+    id: UUID
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    duration_ms: int
+    status: str
+    cost_rub: float
+    created_at: datetime
+
+
+class LLMCostSummary(BaseModel):
+    calls_ok: int
+    calls_error: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    avg_duration_ms: int
+    max_duration_ms: int
+    # Cost is the SDK estimate using the settings tariff. The real bill comes
+    # from Sber — `prompt_price` / `completion_price` are exposed so the UI
+    # can show the assumption alongside the number.
+    prompt_cost_rub: float
+    completion_cost_rub: float
+    total_cost_rub: float
+    prompt_price_per_1k_rub: float
+    completion_price_per_1k_rub: float
+
+
+class NormalizerPathMix(BaseModel):
+    automaton: int
+    llm_fallback: int
+    none: int
+    automaton_pct: float  # 0..1
+
+
+class RuntimeMemoryOut(BaseModel):
+    process: str  # "api" — the FastAPI process answering this request
+    rss_mb: float
+    vms_mb: float | None = None
+    cpu_percent: float | None = None
+
+
+class PipelineMetrics(BaseModel):
+    stage_timings: list[StageTimingOut]
+    llm_cost: LLMCostSummary
+    normalizer_path: NormalizerPathMix
+    recent_llm_calls: list[LLMCallOut]
+    runtime: RuntimeMemoryOut | None = None
+    window_hours: int

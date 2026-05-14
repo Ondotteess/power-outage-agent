@@ -7,6 +7,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -188,6 +189,10 @@ class Notification(Base):
 
 class TaskRecord(Base):
     __tablename__ = "tasks"
+    __table_args__ = (
+        Index("ix_tasks_task_type_completed_at", "task_type", "completed_at"),
+        Index("ix_tasks_created_at", "created_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     task_type: Mapped[str] = mapped_column(String(50))
@@ -197,10 +202,44 @@ class TaskRecord(Base):
     payload: Mapped[dict] = mapped_column(JSON)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     trace_id: Mapped[UUID] = mapped_column(Uuid)
+    # Per-stage timing. `started_at` is set when the dispatcher pulls the task,
+    # `completed_at` when the handler returns (or fails). Duration = diff;
+    # nullable so historic rows from before the metrics feature stay valid.
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # For NORMALIZE_EVENT tasks: which path produced the event. Lets the
+    # Metrics page show automaton-vs-LLM ratio without scanning every call.
+    normalizer_path: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
+
+
+class LLMCall(Base):
+    """One row per chat-completion request to GigaChat.
+
+    The pipeline writes this from `LLMNormalizer.normalize` after a successful
+    call so the Metrics page can show real token/cost numbers. We keep this in
+    its own table instead of stuffing into TaskRecord because a single task
+    may issue zero or more LLM calls (today it's at most one, but the shape
+    survives future caching/retry semantics).
+    """
+
+    __tablename__ = "llm_calls"
+    __table_args__ = (Index("ix_llm_calls_created_at", "created_at"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    task_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    model: Mapped[str] = mapped_column(String(64))
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20))  # ok | error
+    trace_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class PollRequest(Base):

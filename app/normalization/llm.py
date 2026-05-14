@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import UTC, datetime
-from typing import Any
-from uuid import uuid4
+from typing import Any, Protocol
+from uuid import UUID, uuid4
 
 from app.config import settings
 from app.models.schemas import (
@@ -32,6 +33,22 @@ from app.normalization.gigachat_client import (
     GigaChatError,
     GigaChatInvalidResponseError,
 )
+
+
+class LLMCallStoreProtocol(Protocol):
+    async def record(
+        self,
+        *,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        duration_ms: int,
+        status: str,
+        task_id: UUID | None = None,
+        trace_id: UUID | None = None,
+    ) -> None: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +87,14 @@ class LLMNormalizer:
     don't break the rest of the app.
     """
 
-    def __init__(self, client: GigaChatClient | None = None) -> None:
+    def __init__(
+        self,
+        client: GigaChatClient | None = None,
+        *,
+        call_store: LLMCallStoreProtocol | None = None,
+    ) -> None:
         self._client = client
+        self._call_store = call_store
 
     def _get_client(self) -> GigaChatClient:
         if self._client is None:
@@ -86,6 +109,35 @@ class LLMNormalizer:
                 verify_ssl=settings.gigachat_verify_ssl,
             )
         return self._client
+
+    async def _record_call(
+        self,
+        *,
+        client: GigaChatClient,
+        response: dict | None,
+        duration_ms: int,
+        status: str,
+        trace_id: UUID | None,
+    ) -> None:
+        if self._call_store is None:
+            return
+        usage = (
+            GigaChatClient.extract_usage(response)
+            if response is not None
+            else {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        )
+        try:
+            await self._call_store.record(
+                model=client.model_name,
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                total_tokens=usage["total_tokens"],
+                duration_ms=duration_ms,
+                status=status,
+                trace_id=trace_id,
+            )
+        except Exception:  # noqa: BLE001 — metrics must never break normalization
+            logger.exception("LLMNormalizer  call_store.record failed (metric drop)")
 
     async def normalize(self, record: ParsedRecordSchema) -> NormalizedEventSchema | None:
         payload = _record_payload(record)
@@ -103,6 +155,8 @@ class LLMNormalizer:
             )
             return None
 
+        started = time.perf_counter()
+        response: dict | None = None
         try:
             response = await client.chat_completion(
                 messages=[
@@ -119,6 +173,14 @@ class LLMNormalizer:
                 temperature=0.0,
             )
         except GigaChatInvalidResponseError as exc:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            await self._record_call(
+                client=client,
+                response=None,
+                duration_ms=duration_ms,
+                status="error",
+                trace_id=record.trace_id,
+            )
             logger.warning(
                 "LLMNormalizer  invalid response shape  parsed_record_id=%s  error=%s",
                 record.id,
@@ -126,15 +188,29 @@ class LLMNormalizer:
             )
             return None
         except GigaChatError as exc:
-            # Transport-level (auth, HTTP, network). Let the Dispatcher decide
-            # whether to retry by re-raising; for non-recoverable cases the
-            # error message will surface in the DLQ row.
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            await self._record_call(
+                client=client,
+                response=None,
+                duration_ms=duration_ms,
+                status="error",
+                trace_id=record.trace_id,
+            )
             logger.error(
                 "LLMNormalizer  API error  parsed_record_id=%s  error=%s",
                 record.id,
                 exc,
             )
             raise
+
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        await self._record_call(
+            client=client,
+            response=response,
+            duration_ms=duration_ms,
+            status="ok",
+            trace_id=record.trace_id,
+        )
 
         try:
             content = GigaChatClient.extract_message_content(response)

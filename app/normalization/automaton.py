@@ -145,7 +145,15 @@ class FallbackNormalizer:
     The threshold is the confidence below which the automaton's output is
     considered unsafe to trust on its own; callers pass it explicitly so the
     pipeline can wire it from settings.
+
+    After each `normalize()` call, `last_path` reflects which stage produced
+    the result. Safe to read from the same coroutine that awaited normalize()
+    because the dispatcher processes tasks sequentially.
     """
+
+    PATH_AUTOMATON = "automaton"
+    PATH_LLM_FALLBACK = "llm_fallback"
+    PATH_NONE = "none"
 
     def __init__(
         self,
@@ -156,6 +164,7 @@ class FallbackNormalizer:
         self._primary = primary
         self._fallback = fallback
         self._threshold = threshold
+        self.last_path: str | None = None
 
     async def normalize(self, record: ParsedRecordSchema) -> NormalizedEventSchema | None:
         result = self._primary.parse(record)
@@ -165,6 +174,7 @@ class FallbackNormalizer:
                 record.id,
                 result.confidence,
             )
+            self.last_path = self.PATH_AUTOMATON
             return result.event
 
         logger.info(
@@ -174,10 +184,14 @@ class FallbackNormalizer:
         )
         fallback_event = await self._fallback.normalize(record)
         if fallback_event is not None:
+            self.last_path = self.PATH_LLM_FALLBACK
             return fallback_event
 
-        # Fallback also failed — return the automaton's best effort if there
-        # was any, otherwise None.
+        # Fallback also failed — return the automaton's best effort if any.
+        if result.event is not None:
+            self.last_path = self.PATH_AUTOMATON
+        else:
+            self.last_path = self.PATH_NONE
         return result.event
 
 

@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     gigachat_oauth_url: str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
     gigachat_model: str = "GigaChat-2"  # base tier of v2 family (no separate "Lite" anymore)
     gigachat_verify_ssl: bool = True
+    # Approximate cost of one chat-completion call, RUB per 1k tokens. Used
+    # only for the Metrics dashboard — the real bill comes from Sber. Keep
+    # input/output rates separate so they can be tuned independently when the
+    # tariff changes.
+    gigachat_price_per_1k_prompt_rub: float = 0.20
+    gigachat_price_per_1k_completion_rub: float = 0.60
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

@@ -15,6 +15,7 @@ import type {
   Office,
   OfficeImpact,
   ParsedRecord,
+  PipelineMetrics,
   PipelineStatus,
   QueueBacklogPoint,
   RawRecord,
@@ -29,6 +30,7 @@ export interface ApiClient {
   getActivity(limit?: number): Promise<ActivityEvent[]>;
   getNormalizationQuality(): Promise<NormalizationQuality>;
   getQueueBacklog(): Promise<QueueBacklogPoint[]>;
+  getPipelineMetrics(hours?: number): Promise<PipelineMetrics>;
 
   // Sources
   listSources(): Promise<Source[]>;

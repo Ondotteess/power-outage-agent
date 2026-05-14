@@ -152,6 +152,67 @@ export interface ActionResponse {
   request_id?: string | null;
 }
 
+// ── Metrics ───────────────────────────────────────────────────────────────
+
+export interface StageTiming {
+  task_type: string;
+  count: number;
+  avg_ms: number;
+  p50_ms: number;
+  p95_ms: number;
+  max_ms: number;
+}
+
+export interface LLMCall {
+  id: string;
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  duration_ms: number;
+  status: string;
+  cost_rub: number;
+  created_at: string;
+}
+
+export interface LLMCostSummary {
+  calls_ok: number;
+  calls_error: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  avg_duration_ms: number;
+  max_duration_ms: number;
+  prompt_cost_rub: number;
+  completion_cost_rub: number;
+  total_cost_rub: number;
+  prompt_price_per_1k_rub: number;
+  completion_price_per_1k_rub: number;
+}
+
+export interface NormalizerPathMix {
+  automaton: number;
+  llm_fallback: number;
+  none: number;
+  automaton_pct: number;
+}
+
+export interface RuntimeMemory {
+  process: string;
+  rss_mb: number;
+  vms_mb: number | null;
+  cpu_percent: number | null;
+}
+
+export interface PipelineMetrics {
+  stage_timings: StageTiming[];
+  llm_cost: LLMCostSummary;
+  normalizer_path: NormalizerPathMix;
+  recent_llm_calls: LLMCall[];
+  runtime: RuntimeMemory | null;
+  window_hours: number;
+}
+
 // Domain/UI types shared by the real and mock API clients.
 export interface Office {
   id: string;

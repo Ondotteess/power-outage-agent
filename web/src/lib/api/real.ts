@@ -45,6 +45,7 @@ export const realClient: ApiClient = {
   getActivity: (limit) => get("/dashboard/activity", { limit }),
   getNormalizationQuality: () => get("/dashboard/normalization-quality"),
   getQueueBacklog: () => get("/dashboard/queue-backlog"),
+  getPipelineMetrics: (hours = 24) => get("/metrics/pipeline", { hours }),
 
   listSources: () => get("/sources"),
   pollSource: (id) => post(`/sources/${id}/poll`),
