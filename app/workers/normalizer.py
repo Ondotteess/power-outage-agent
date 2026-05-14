@@ -123,7 +123,9 @@ class NormalizationHandler:
             return None
         return await getter(parsed_id)
 
-    async def _add_cached_sources(self, event_id: UUID, sources: list[UUID], trace_id: UUID) -> None:
+    async def _add_cached_sources(
+        self, event_id: UUID, sources: list[UUID], trace_id: UUID
+    ) -> None:
         updater = getattr(self._normalized_store, "add_sources", None)
         if updater is None:
             return

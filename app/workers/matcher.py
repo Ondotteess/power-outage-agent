@@ -68,11 +68,11 @@ class OfficeMatchHandler:
             matches = [
                 OfficeMatch(
                     office=_to_matchable_office(offices[0]),
-                impact_level=ImpactLevel.LOW,
-                match_strategy="demo_unmatched",
-                match_score=0.1,
-                explanation=("demo fallback: no deterministic address match",),
-            )
+                    impact_level=ImpactLevel.LOW,
+                    match_strategy="demo_unmatched",
+                    match_score=0.1,
+                    explanation=("demo fallback: no deterministic address match",),
+                )
             ]
         detected_at = datetime.now(UTC)
         impacts = [

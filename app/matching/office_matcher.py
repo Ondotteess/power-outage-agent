@@ -195,12 +195,18 @@ def _score_candidate(
                 impact_level,
                 "house_range" if exact_street else "fuzzy_house_range",
                 round(min(score, 0.92), 3),
-                tuple([*explanation, f"house={candidate.house_number} covered_by={coverage.ranges}"]),
+                tuple(
+                    [*explanation, f"house={candidate.house_number} covered_by={coverage.ranges}"]
+                ),
             )
         elif has_house_data:
             continue
         else:
-            score = 0.68 if exact_street and exact_city else 0.55 + 0.08 * street_score + 0.05 * city_score
+            score = (
+                0.68
+                if exact_street and exact_city
+                else 0.55 + 0.08 * street_score + 0.05 * city_score
+            )
             if score < 0.62:
                 continue
             match = OfficeMatch(

@@ -12,7 +12,9 @@ class QueueSnapshotStoreProtocol(Protocol):
 
 
 class QueueSnapshotter:
-    def __init__(self, store: QueueSnapshotStoreProtocol, *, interval_seconds: float = 60.0) -> None:
+    def __init__(
+        self, store: QueueSnapshotStoreProtocol, *, interval_seconds: float = 60.0
+    ) -> None:
         self._store = store
         self._interval_seconds = interval_seconds
 
