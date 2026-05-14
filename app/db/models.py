@@ -56,12 +56,14 @@ class ParsedRecord(Base):
         Index("ix_parsed_records_raw_record_id", "raw_record_id"),
         # dedup within a source by external ID
         Index("ix_parsed_records_source_external", "source_id", "external_id"),
+        UniqueConstraint("fingerprint", name="uq_parsed_records_fingerprint"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     raw_record_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("raw_records.id"))
     source_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("sources.id"), nullable=True)
     external_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
 
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -164,8 +166,39 @@ class OfficeImpact(Base):
     impact_level: Mapped[str] = mapped_column(String(20))
     match_strategy: Mapped[str] = mapped_column(String(64))
     match_score: Mapped[float] = mapped_column(Float, default=0.0)
+    match_explanation: Mapped[list] = mapped_column(JSON, default=list)
     trace_id: Mapped[UUID] = mapped_column(Uuid)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class EventLog(Base):
+    __tablename__ = "event_logs"
+    __table_args__ = (
+        Index("ix_event_logs_created_at", "created_at"),
+        Index("ix_event_logs_trace_id", "trace_id"),
+        Index("ix_event_logs_event_type", "event_type"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    event_type: Mapped[str] = mapped_column(String(64))
+    severity: Mapped[str] = mapped_column(String(16))
+    message: Mapped[str] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    task_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    trace_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class QueueDepthSnapshot(Base):
+    __tablename__ = "queue_depth_snapshots"
+    __table_args__ = (Index("ix_queue_depth_snapshots_created_at", "created_at"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    pending: Mapped[int] = mapped_column(Integer, default=0)
+    running: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Notification(Base):
@@ -199,6 +232,7 @@ class TaskRecord(Base):
     input_hash: Mapped[str] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(20))  # pending | running | done | failed
     attempt: Mapped[int] = mapped_column(default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=5)
     payload: Mapped[dict] = mapped_column(JSON)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     trace_id: Mapped[UUID] = mapped_column(Uuid)
@@ -208,6 +242,7 @@ class TaskRecord(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # For NORMALIZE_EVENT tasks: which path produced the event. Lets the
     # Metrics page show automaton-vs-LLM ratio without scanning every call.
     normalizer_path: Mapped[str | None] = mapped_column(String(32), nullable=True)
