@@ -1,0 +1,50 @@
+[
+  {
+    "name": "clean_city_street_house",
+    "parsed": {
+      "start_time": "2026-05-15T03:00:00Z",
+      "end_time": "2026-05-15T09:00:00Z",
+      "location_city": "г Новосибирск",
+      "location_street": "ул Ленина",
+      "extra": { "houses": "12" },
+      "reason": "Плановые работы"
+    },
+    "expected": {
+      "event_type": "power_outage",
+      "canonical_key": "новосибирск|ленина|12",
+      "min_confidence": 0.9
+    }
+  },
+  {
+    "name": "dirty_abbreviations",
+    "parsed": {
+      "start_time": "2026-05-16T04:00:00Z",
+      "end_time": "2026-05-16T08:00:00Z",
+      "location_city": "г. Томск",
+      "location_street": "пр-т Кирова, д. 20",
+      "extra": {},
+      "reason": "Ремонтные работы"
+    },
+    "expected": {
+      "event_type": "power_outage",
+      "canonical_key": "томск|кирова|20",
+      "min_confidence": 0.8
+    }
+  },
+  {
+    "name": "house_range",
+    "parsed": {
+      "start_time": "2026-05-17T02:00:00Z",
+      "end_time": "2026-05-17T06:00:00Z",
+      "location_city": "Кемерово",
+      "location_street": "улица Советская",
+      "extra": { "houses": "10-14" },
+      "reason": "Отключение электроэнергии"
+    },
+    "expected": {
+      "event_type": "power_outage",
+      "canonical_key": "кемерово|советская|10",
+      "min_confidence": 0.9
+    }
+  }
+]
