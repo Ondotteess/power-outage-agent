@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from uuid import UUID
 
 from app.models.schemas import ImpactLevel
@@ -48,6 +49,7 @@ class OfficeMatch:
     impact_level: ImpactLevel
     match_strategy: str
     match_score: float
+    explanation: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,8 +66,37 @@ class _EventProfile:
     city_key: str | None
     street_keys: tuple[str, ...]
     building_key: str | None
-    street_house_numbers: dict[str, set[int]]
+    street_house_coverage: dict[str, HouseCoverage]
     street_has_house_data: set[str]
+
+
+@dataclass(frozen=True)
+class HouseCoverage:
+    ranges: tuple[tuple[int, int], ...] = ()
+
+    @classmethod
+    def parse(cls, value: str | None) -> HouseCoverage:
+        ranges: list[tuple[int, int]] = []
+        normalized = normalize_text(value)
+        for match in HOUSE_RE.finditer(normalized):
+            start = int(match.group(1))
+            end = int(match.group(2) or start)
+            if end < start:
+                start, end = end, start
+            ranges.append((start, end))
+        return cls(tuple(ranges))
+
+    def covers(self, house_number: int | None) -> bool:
+        if house_number is None:
+            return False
+        return any(start <= house_number <= end for start, end in self.ranges)
+
+    def first(self) -> int | None:
+        return min((start for start, _end in self.ranges), default=None)
+
+    @property
+    def has_data(self) -> bool:
+        return bool(self.ranges)
 
 
 class OfficeMatcher:
@@ -81,11 +112,13 @@ class OfficeMatcher:
         self._by_exact: dict[tuple[str, str, str], list[_OfficeProfile]] = {}
         self._by_street: dict[tuple[str, str], list[_OfficeProfile]] = {}
         self._by_street_only: dict[str, list[_OfficeProfile]] = {}
+        self._profiles: list[_OfficeProfile] = []
 
         for office in offices:
             profile = _office_profile(office)
             if profile is None:
                 continue
+            self._profiles.append(profile)
             self._by_street.setdefault((profile.city_key, profile.street_key), []).append(profile)
             self._by_street_only.setdefault(profile.street_key, []).append(profile)
             if profile.building_key:
@@ -105,18 +138,13 @@ class OfficeMatcher:
         matched: dict[UUID, OfficeMatch] = {}
         impact_level = _impact_level(event, now)
 
-        for street_key in profile.street_keys:
-            candidates = self._candidates(profile.city_key, street_key)
-            if not candidates:
+        for candidate in self._profiles:
+            match = _score_candidate(candidate, profile, impact_level)
+            if match is None:
                 continue
-
-            for candidate in candidates:
-                match = _score_candidate(candidate, street_key, profile, impact_level)
-                if match is None:
-                    continue
-                existing = matched.get(candidate.office.id)
-                if existing is None or match.match_score > existing.match_score:
-                    matched[candidate.office.id] = match
+            existing = matched.get(candidate.office.id)
+            if existing is None or match.match_score > existing.match_score:
+                matched[candidate.office.id] = match
 
         return sorted(matched.values(), key=lambda m: (-m.match_score, m.office.name))
 
@@ -129,22 +157,64 @@ class OfficeMatcher:
 
 def _score_candidate(
     candidate: _OfficeProfile,
-    street_key: str,
     event: _EventProfile,
     impact_level: ImpactLevel,
 ) -> OfficeMatch | None:
-    if event.building_key and candidate.building_key == event.building_key:
-        return OfficeMatch(candidate.office, impact_level, "exact_address", 1.0)
-
-    house_numbers = event.street_house_numbers.get(street_key, set())
-    has_house_data = street_key in event.street_has_house_data
-    if candidate.house_number is not None and candidate.house_number in house_numbers:
-        return OfficeMatch(candidate.office, impact_level, "house_range", 0.92)
-
-    if has_house_data:
+    city_score = _city_score(event.city_key, candidate.city_key)
+    if city_score < 0.80:
         return None
 
-    return OfficeMatch(candidate.office, impact_level, "street_area", 0.68)
+    best: OfficeMatch | None = None
+    for street_key in event.street_keys:
+        street_score = _similarity(street_key, candidate.street_key)
+        if street_score < 0.84:
+            continue
+
+        exact_street = street_key == candidate.street_key
+        exact_city = event.city_key is not None and event.city_key == candidate.city_key
+        explanation = [
+            f"city_score={city_score:.2f} ({event.city_key or 'unknown'} -> {candidate.city_key})",
+            f"street_score={street_score:.2f} ({street_key} -> {candidate.street_key})",
+        ]
+
+        coverage = event.street_house_coverage.get(street_key, HouseCoverage())
+        has_house_data = street_key in event.street_has_house_data
+        if event.building_key and candidate.building_key == event.building_key and exact_street:
+            score = 1.0 if exact_city else 0.96
+            match = OfficeMatch(
+                candidate.office,
+                impact_level,
+                "exact_address" if exact_city else "fuzzy_city_exact_address",
+                score,
+                tuple([*explanation, f"building={candidate.building_key} exact"]),
+            )
+        elif coverage.covers(candidate.house_number):
+            score = 0.92 if exact_street and exact_city else 0.84 + 0.06 * street_score
+            match = OfficeMatch(
+                candidate.office,
+                impact_level,
+                "house_range" if exact_street else "fuzzy_house_range",
+                round(min(score, 0.92), 3),
+                tuple([*explanation, f"house={candidate.house_number} covered_by={coverage.ranges}"]),
+            )
+        elif has_house_data:
+            continue
+        else:
+            score = 0.68 if exact_street and exact_city else 0.55 + 0.08 * street_score + 0.05 * city_score
+            if score < 0.62:
+                continue
+            match = OfficeMatch(
+                candidate.office,
+                impact_level,
+                "street_area" if exact_street else "fuzzy_street_area",
+                round(min(score, 0.74), 3),
+                tuple([*explanation, "no house data in event; street-wide impact"]),
+            )
+
+        if best is None or match.match_score > best.match_score:
+            best = match
+
+    return best
 
 
 def _office_profile(office: MatchableOffice) -> _OfficeProfile | None:
@@ -159,14 +229,14 @@ def _office_profile(office: MatchableOffice) -> _OfficeProfile | None:
         city_key=city_key,
         street_key=street_key,
         building_key=building_key,
-        house_number=_first_house_number(building_key),
+        house_number=HouseCoverage.parse(building_key).first(),
     )
 
 
 def _event_profile(event: MatchableEvent) -> _EventProfile:
     city_key = normalize_city(event.location_city)
     building_key = normalize_building(event.location_building)
-    street_house_numbers: dict[str, set[int]] = {}
+    street_house_coverage: dict[str, HouseCoverage] = {}
     street_has_house_data: set[str] = set()
     street_keys: list[str] = []
 
@@ -184,17 +254,23 @@ def _event_profile(event: MatchableEvent) -> _EventProfile:
 
         if _has_house_data(segment):
             street_has_house_data.add(street_key)
-            street_house_numbers.setdefault(street_key, set()).update(_house_numbers(segment))
+            street_house_coverage[street_key] = _merge_coverage(
+                street_house_coverage.get(street_key),
+                HouseCoverage.parse(segment),
+            )
 
     if building_key and street_keys:
         street_has_house_data.add(street_keys[0])
-        street_house_numbers.setdefault(street_keys[0], set()).update(_house_numbers(building_key))
+        street_house_coverage[street_keys[0]] = _merge_coverage(
+            street_house_coverage.get(street_keys[0]),
+            HouseCoverage.parse(building_key),
+        )
 
     return _EventProfile(
         city_key=city_key,
         street_keys=tuple(street_keys),
         building_key=building_key,
-        street_house_numbers=street_house_numbers,
+        street_house_coverage=street_house_coverage,
         street_has_house_data=street_has_house_data,
     )
 
@@ -221,25 +297,26 @@ def _has_house_data(value: str) -> bool:
     return bool(tokens and is_house_token(tokens[-1]) and any(t in STREET_WORDS for t in tokens))
 
 
-def _house_numbers(value: str | None) -> set[int]:
-    numbers: set[int] = set()
-    normalized = normalize_text(value)
-    for match in HOUSE_RE.finditer(normalized):
-        start = int(match.group(1))
-        end = int(match.group(2) or start)
-        if end < start:
-            start, end = end, start
-        if end - start > 300:
-            numbers.add(start)
-            numbers.add(end)
-            continue
-        numbers.update(range(start, end + 1))
-    return numbers
+def _merge_coverage(left: HouseCoverage | None, right: HouseCoverage) -> HouseCoverage:
+    if left is None:
+        return right
+    return HouseCoverage(tuple([*left.ranges, *right.ranges]))
 
 
-def _first_house_number(value: str | None) -> int | None:
-    numbers = _house_numbers(value)
-    return min(numbers) if numbers else None
+def _city_score(event_city: str | None, office_city: str) -> float:
+    if event_city is None:
+        return 0.88
+    return _similarity(event_city, office_city)
+
+
+def _similarity(left: str | None, right: str | None) -> float:
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    if left in right or right in left:
+        return 0.93
+    return SequenceMatcher(a=left, b=right).ratio()
 
 
 def _is_expired(event: MatchableEvent, now: datetime) -> bool:

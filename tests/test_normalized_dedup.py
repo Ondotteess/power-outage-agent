@@ -4,7 +4,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from app.db.repositories import _merge_normalized_event, _merge_source_lists
+from app.db.repositories import (
+    _dedup_strategy,
+    _merge_normalized_event,
+    _merge_source_lists,
+    _windows_match,
+)
 from app.models.schemas import EventType, LocationSchema, NormalizedEventSchema
 
 
@@ -77,3 +82,36 @@ def test_merge_normalized_event_keeps_higher_confidence_payload():
     assert existing.location_normalized == "old normalized"
     assert existing.reason == "fallback reason"
     assert existing.sources == ["raw-a", str(event.sources[0])]
+
+
+def test_dedup_matches_overlapping_window_on_same_address():
+    existing = ExistingEvent(
+        start_time=datetime(2026, 5, 12, 3, tzinfo=UTC),
+        end_time=datetime(2026, 5, 12, 9, tzinfo=UTC),
+        location_normalized="томск|кирова|20",
+    )
+    event = _event(confidence=0.7)
+    event.start_time = datetime(2026, 5, 12, 8, 50, tzinfo=UTC)
+    event.end_time = datetime(2026, 5, 12, 12, tzinfo=UTC)
+    event.location.normalized = "томск|кирова|20"
+
+    assert _windows_match(existing, event)
+    assert _dedup_strategy(existing, event) == "overlap_window"
+
+
+def test_merge_normalized_event_expands_time_window_even_for_lower_confidence():
+    existing = ExistingEvent(
+        sources=["raw-a"],
+        confidence=0.9,
+        start_time=datetime(2026, 5, 12, 4, tzinfo=UTC),
+        end_time=datetime(2026, 5, 12, 8, tzinfo=UTC),
+    )
+    event = _event(confidence=0.2, reason="new source")
+    event.start_time = datetime(2026, 5, 12, 3, 50, tzinfo=UTC)
+    event.end_time = datetime(2026, 5, 12, 10, tzinfo=UTC)
+
+    _merge_normalized_event(existing, event, uuid4(), [str(event.sources[0])])
+
+    assert existing.confidence == 0.9
+    assert existing.start_time == datetime(2026, 5, 12, 3, 50, tzinfo=UTC)
+    assert existing.end_time == datetime(2026, 5, 12, 10, tzinfo=UTC)

@@ -49,6 +49,7 @@ def test_exact_address_match_wins_with_full_building():
     assert matches[0].match_strategy == "exact_address"
     assert matches[0].match_score == 1.0
     assert matches[0].impact_level == ImpactLevel.HIGH
+    assert any("building=12 exact" in item for item in matches[0].explanation)
 
 
 def test_house_range_match_uses_numbers_from_matching_street_segment():
@@ -65,6 +66,7 @@ def test_house_range_match_uses_numbers_from_matching_street_segment():
     assert len(matches) == 1
     assert matches[0].match_strategy == "house_range"
     assert matches[0].match_score == 0.92
+    assert any("covered_by" in item for item in matches[0].explanation)
 
 
 def test_house_data_blocks_office_on_same_street_when_number_is_not_covered():
@@ -98,3 +100,20 @@ def test_expired_event_is_ignored():
     event = _event(end_time=NOW - timedelta(minutes=1))
 
     assert OfficeMatcher([office]).match(event, now=NOW) == []
+
+
+def test_fuzzy_city_and_street_match_house_range():
+    office = _office(city="Новосибирск", address="улица Станиславского, 24")
+    event = _event(
+        city="г. Новосибирск",
+        street="ул Станиславскго",
+        building=None,
+        normalized="г. Новосибирск, ул Станиславскго 22-26",
+    )
+
+    matches = OfficeMatcher([office]).match(event, now=NOW)
+
+    assert len(matches) == 1
+    assert matches[0].match_strategy == "fuzzy_house_range"
+    assert matches[0].match_score >= 0.84
+    assert any("street_score" in item for item in matches[0].explanation)

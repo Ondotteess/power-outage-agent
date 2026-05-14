@@ -88,6 +88,7 @@ class OfficeImpactSchema(BaseModel):
     impact_level: ImpactLevel
     match_strategy: str  # exact_address | geo_radius | feeder
     match_score: float = 0.0
+    match_explanation: list[str] = Field(default_factory=list)
     detected_at: datetime
 
 
