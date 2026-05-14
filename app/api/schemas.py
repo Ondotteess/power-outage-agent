@@ -87,6 +87,34 @@ class OfficeOut(BaseModel):
     longitude: float | None = None
 
 
+class OfficeImportRow(BaseModel):
+    """One row in an /api/offices/import payload.
+
+    `name + city + address` form the natural key — upsert matches on this
+    tuple. Other fields are overwritten when present.
+    """
+
+    name: str
+    city: str
+    address: str
+    region: str
+    is_active: bool = True
+    latitude: float | None = None
+    longitude: float | None = None
+    extra: dict = Field(default_factory=dict)
+
+
+class OfficeImportRequest(BaseModel):
+    offices: list[OfficeImportRow] = Field(default_factory=list)
+
+
+class OfficeImportResult(BaseModel):
+    received: int
+    inserted: int
+    updated: int
+    skipped: int
+
+
 class OfficeImpactOut(BaseModel):
     id: UUID
     office_id: UUID

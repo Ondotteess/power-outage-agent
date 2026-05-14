@@ -488,9 +488,7 @@ class NormalizedEventStore:
         )
         async with self._sf() as session:
             result = await session.execute(
-                select(NormalizedEvent).where(
-                    NormalizedEvent.parsed_record_id == parsed_record_id
-                )
+                select(NormalizedEvent).where(NormalizedEvent.parsed_record_id == parsed_record_id)
             )
             return result.scalar_one_or_none()
 
@@ -546,6 +544,55 @@ class OfficeStore:
                 session.add(Office(**payload))
             await session.commit()
         logger.info("OfficeStore  replaced office registry with %d office(s)", len(defaults))
+
+    async def upsert_many(self, rows: list[dict]) -> tuple[int, int]:
+        """Idempotent import: match by (name, city, address) — the existing
+        unique constraint — and either update or insert. Returns
+        (inserted, updated) counts so the API can return them to the caller.
+
+        Rows without the three required keys are silently skipped; the caller
+        is expected to validate at the request boundary."""
+        if not rows:
+            return (0, 0)
+        inserted = 0
+        updated = 0
+        async with self._sf() as session:
+            for payload in rows:
+                name = payload.get("name")
+                city = payload.get("city")
+                address = payload.get("address")
+                if not (name and city and address):
+                    continue
+                result = await session.execute(
+                    select(Office)
+                    .where(Office.name == name)
+                    .where(Office.city == city)
+                    .where(Office.address == address)
+                    .limit(1)
+                )
+                existing = result.scalars().first()
+                if existing is None:
+                    session.add(Office(**payload))
+                    inserted += 1
+                else:
+                    existing.region = payload.get("region", existing.region)
+                    if "is_active" in payload:
+                        existing.is_active = bool(payload["is_active"])
+                    if "latitude" in payload:
+                        existing.latitude = payload["latitude"]
+                    if "longitude" in payload:
+                        existing.longitude = payload["longitude"]
+                    if "extra" in payload:
+                        existing.extra = payload["extra"] or {}
+                    updated += 1
+            await session.commit()
+        logger.info(
+            "OfficeStore  upsert_many  inserted=%d  updated=%d  total=%d",
+            inserted,
+            updated,
+            len(rows),
+        )
+        return (inserted, updated)
 
 
 class OfficeImpactStore:

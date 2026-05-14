@@ -47,6 +47,10 @@ class Settings(BaseSettings):
 
     cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
+    # /api/offices/import gate. Empty string disables auth (dev / pilot mode);
+    # in production set to a non-empty value and pass via X-Import-Token.
+    office_import_token: str = ""
+
     log_level: str = "INFO"
 
 
