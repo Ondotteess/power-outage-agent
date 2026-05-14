@@ -94,6 +94,36 @@ _THREAT_SAMPLES = [
         "locality": "Томская область, Колпашево",
         "reason": "Демо: осмотр линии после неблагоприятной погоды",
     },
+    # --- Address-normalization stress samples ---------------------------------
+    # The next three records intentionally mangle abbreviations / locality
+    # prefixes / punctuation so that, before canonical_key, dedup saw them as
+    # distinct events. They now share a key with the clean samples above and
+    # the matcher hits the same offices. Keep them paired with the clean
+    # variants — moving an office requires updating both lines.
+    {
+        "city": "Новокузнецк",
+        "street": "ул. Кирова, д. 55",
+        "houses": "55",
+        "region": "RU-KEM",
+        "locality": "Кемеровская область - Кузбасс, г. Новокузнецк",
+        "reason": "Демо: проверка нормализации сокращений ул./д.",
+    },
+    {
+        "city": "Кемерово",
+        "street": "пр-т Ленина, 90",
+        "houses": "90",
+        "region": "RU-KEM",
+        "locality": "Кемеровская область - Кузбасс, Кемерово",
+        "reason": "Демо: проверка нормализации пр-т → проспект",
+    },
+    {
+        "city": "г. Томск",
+        "street": "пр. Ленина 120",
+        "houses": "120",
+        "region": "RU-TOM",
+        "locality": "Томская область, г. Томск",
+        "reason": "Демо: проверка нормализации без запятой и с префиксом г.",
+    },
 ]
 
 

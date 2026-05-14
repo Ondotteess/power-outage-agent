@@ -171,6 +171,7 @@ def test_build_event_uses_llm_address_and_clamps_confidence():
     assert event is not None
     assert event.parsed_record_id == parsed.id
     assert event.event_type == EventType.MAINTENANCE
-    assert event.location.normalized == "томск, улица весенняя"
+    # `normalized` is now the deterministic canonical key, not LLM free text.
+    assert event.location.normalized == "томск|весенняя|"
     assert event.location.building is None
     assert event.confidence == 1.0

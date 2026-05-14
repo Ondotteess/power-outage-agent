@@ -27,7 +27,7 @@ docker compose --profile demo up --build db api web demo-runner
 - поднимает Postgres, FastAPI (`http://localhost:8000`) и web (`http://localhost:5173`);
 - запускает одноразовый demo-runner;
 - пересобирает демо-реестр из 50 офисов по Кемеровской, Новосибирской и Томской областям;
-- берёт по 10 локальных demo-записей на каждый активный источник;
+- берёт по 13 локальных demo-записей на каждый активный источник (10 «чистых» + 3 «грязных» варианта одного адреса с сокращениями `ул.`/`пр-т`/`г.`, чтобы убедиться, что canonical_key склеивает их в дедупе);
 - прогоняет стадии `fetch_source → parse_content → normalize_event → deduplicate_event → match_offices → emit_event`;
 - пишет office impacts и dashboard notifications в БД, чтобы процесс был виден в UI.
 

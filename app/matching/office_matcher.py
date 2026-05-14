@@ -6,51 +6,18 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from app.models.schemas import ImpactLevel
-
-_TEXT_CLEAN_RE = re.compile(r"[^0-9a-zа-яё/\-–—]+", re.IGNORECASE)
-_HOUSE_RE = re.compile(r"(?<!\d)(\d{1,4})(?:\s*[-–—]\s*(\d{1,4}))?", re.IGNORECASE)
-_HOUSE_KEY_RE = re.compile(r"(?<!\d)(\d{1,4}(?:/\d{1,4})?[a-zа-я]?)", re.IGNORECASE)
-_HOUSE_RANGE_RE = re.compile(r"\d{1,4}\s*[-–—]\s*\d{1,4}")
-
-_REPLACEMENTS = (
-    (re.compile(r"\bул\.?\b", re.IGNORECASE), " улица "),
-    (re.compile(r"\bпр-?кт\.?\b", re.IGNORECASE), " проспект "),
-    (re.compile(r"\bпр\.?\b", re.IGNORECASE), " проспект "),
-    (re.compile(r"\bпер\.?\b", re.IGNORECASE), " переулок "),
-    (re.compile(r"\bб-р\.?\b", re.IGNORECASE), " бульвар "),
-    (re.compile(r"\bмкр\.?\b", re.IGNORECASE), " микрорайон "),
-    (re.compile(r"\bд\.?\b", re.IGNORECASE), " дом "),
-    (re.compile(r"\bк\.?\b", re.IGNORECASE), " корпус "),
-    (re.compile(r"\bстр\.?\b", re.IGNORECASE), " строение "),
+from app.normalization.address import (
+    HOUSE_RANGE_RE,
+    HOUSE_RE,
+    HOUSE_WORDS,
+    STREET_WORDS,
+    is_house_token,
+    normalize_building,
+    normalize_city,
+    normalize_street,
+    normalize_text,
+    split_address,
 )
-
-_LOCALITY_WORDS = {
-    "город",
-    "г",
-    "село",
-    "с",
-    "деревня",
-    "д",
-    "поселок",
-    "пос",
-    "пгт",
-    "аул",
-}
-_STREET_WORDS = {
-    "улица",
-    "проспект",
-    "переулок",
-    "проезд",
-    "бульвар",
-    "площадь",
-    "шоссе",
-    "тракт",
-    "микрорайон",
-    "набережная",
-    "аллея",
-}
-_HOUSE_WORDS = {"дом", "корпус", "строение", "владение", "литера", "офис"}
-_NO_BUILDING = {"", "бн", "б/н", "без номера", "без номер", "нет номера"}
 
 
 @dataclass(frozen=True)
@@ -181,10 +148,10 @@ def _score_candidate(
 
 
 def _office_profile(office: MatchableOffice) -> _OfficeProfile | None:
-    city_key = _normalize_city(office.city)
-    street, building = _split_office_address(office.address)
-    street_key = _normalize_street(street)
-    building_key = _normalize_building(building)
+    city_key = normalize_city(office.city)
+    street, building = split_address(office.address)
+    street_key = normalize_street(street)
+    building_key = normalize_building(building)
     if not city_key or not street_key:
         return None
     return _OfficeProfile(
@@ -197,15 +164,19 @@ def _office_profile(office: MatchableOffice) -> _OfficeProfile | None:
 
 
 def _event_profile(event: MatchableEvent) -> _EventProfile:
-    city_key = _normalize_city(event.location_city)
-    building_key = _normalize_building(event.location_building)
+    city_key = normalize_city(event.location_city)
+    building_key = normalize_building(event.location_building)
     street_house_numbers: dict[str, set[int]] = {}
     street_has_house_data: set[str] = set()
     street_keys: list[str] = []
 
-    values = [event.location_street, event.location_normalized, event.location_raw]
+    # NOTE: `location_normalized` is now a canonical pipe-delimited key
+    # (see app.normalization.address.canonical_key), not free text. The
+    # matcher draws richer multi-street/house-range signal from
+    # `location_raw` and `location_street` instead.
+    values = [event.location_street, event.location_raw]
     for segment in _segments(values):
-        street_key = _normalize_street(segment)
+        street_key = normalize_street(segment)
         if not street_key or street_key == city_key:
             continue
         if street_key not in street_keys:
@@ -228,54 +199,6 @@ def _event_profile(event: MatchableEvent) -> _EventProfile:
     )
 
 
-def _split_office_address(address: str) -> tuple[str, str | None]:
-    parts = [p.strip() for p in re.split(r"[,;]", address) if p.strip()]
-    if len(parts) > 1 and _normalize_building(parts[-1]):
-        return ", ".join(parts[:-1]), parts[-1]
-
-    matches = list(_HOUSE_KEY_RE.finditer(address))
-    if not matches:
-        return address, None
-
-    last = matches[-1]
-    street = address[: last.start()].strip(" ,;")
-    return street or address, last.group(1)
-
-
-def _normalize_text(value: str | None) -> str:
-    if not value:
-        return ""
-    text = value.casefold().replace("ё", "е").replace("№", " ")
-    for pattern, replacement in _REPLACEMENTS:
-        text = pattern.sub(replacement, text)
-    text = _TEXT_CLEAN_RE.sub(" ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _normalize_city(value: str | None) -> str | None:
-    tokens = [t for t in _normalize_text(value).split() if t not in _LOCALITY_WORDS]
-    return " ".join(tokens) or None
-
-
-def _normalize_street(value: str | None) -> str:
-    tokens = [
-        t
-        for t in _normalize_text(value).split()
-        if t not in _STREET_WORDS and t not in _HOUSE_WORDS and t not in _LOCALITY_WORDS
-    ]
-    while len(tokens) > 1 and _is_house_token(tokens[-1]):
-        tokens.pop()
-    return " ".join(tokens)
-
-
-def _normalize_building(value: str | None) -> str | None:
-    normalized = _normalize_text(value)
-    if normalized in _NO_BUILDING:
-        return None
-    match = _HOUSE_KEY_RE.search(normalized)
-    return match.group(1) if match else None
-
-
 def _segments(values: list[str | None]) -> list[str]:
     segments: list[str] = []
     for value in values:
@@ -289,19 +212,19 @@ def _segments(values: list[str | None]) -> list[str]:
 
 
 def _has_house_data(value: str) -> bool:
-    normalized = _normalize_text(value)
+    normalized = normalize_text(value)
     tokens = normalized.split()
-    if _HOUSE_RANGE_RE.search(normalized):
+    if HOUSE_RANGE_RE.search(normalized):
         return True
-    if any(token in _HOUSE_WORDS for token in tokens):
+    if any(token in HOUSE_WORDS for token in tokens):
         return True
-    return bool(tokens and _is_house_token(tokens[-1]) and any(t in _STREET_WORDS for t in tokens))
+    return bool(tokens and is_house_token(tokens[-1]) and any(t in STREET_WORDS for t in tokens))
 
 
 def _house_numbers(value: str | None) -> set[int]:
     numbers: set[int] = set()
-    normalized = _normalize_text(value)
-    for match in _HOUSE_RE.finditer(normalized):
+    normalized = normalize_text(value)
+    for match in HOUSE_RE.finditer(normalized):
         start = int(match.group(1))
         end = int(match.group(2) or start)
         if end < start:
@@ -317,10 +240,6 @@ def _house_numbers(value: str | None) -> set[int]:
 def _first_house_number(value: str | None) -> int | None:
     numbers = _house_numbers(value)
     return min(numbers) if numbers else None
-
-
-def _is_house_token(value: str) -> bool:
-    return bool(_HOUSE_KEY_RE.fullmatch(value) or _HOUSE_RANGE_RE.fullmatch(value))
 
 
 def _is_expired(event: MatchableEvent, now: datetime) -> bool:

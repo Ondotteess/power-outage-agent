@@ -201,7 +201,7 @@ class TestLLMNormalizerHappyPath:
         assert event is not None
         assert event.event_type == EventType.MAINTENANCE
         assert event.parsed_record_id == parsed.id
-        assert event.location.normalized == "томск, улица весенняя"
+        assert event.location.normalized == "томск|весенняя|"
         assert event.confidence == pytest.approx(0.86)
         # sources is auto-filled from the parsed record's raw_record_id
         assert event.sources == [parsed.raw_record_id]
@@ -212,7 +212,7 @@ class TestLLMNormalizerHappyPath:
         normalizer = LLMNormalizer(client=client)
         event = await normalizer.normalize(_to_schema(FakeParsedRecord()))
         assert event is not None
-        assert event.location.normalized == "томск, улица весенняя"
+        assert event.location.normalized == "томск|весенняя|"
 
 
 class TestLLMNormalizerFailureModes:

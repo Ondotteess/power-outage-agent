@@ -10,6 +10,7 @@ from app.models.schemas import (
     NormalizedEventSchema,
     ParsedRecordSchema,
 )
+from app.normalization.address import canonical_key
 
 _HOUSE_RE = re.compile(r"(?<!\d)(\d{1,4})(?:/\d{1,4})?[a-zа-я]?", re.IGNORECASE)
 
@@ -35,7 +36,7 @@ class DemoNormalizer:
             end_time=end_time,
             location=LocationSchema(
                 raw=raw_location,
-                normalized=raw_location,
+                normalized=canonical_key(record.location_city, street, building),
                 city=record.location_city,
                 street=street,
                 building=building,

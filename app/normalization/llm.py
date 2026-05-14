@@ -26,6 +26,7 @@ from app.models.schemas import (
     NormalizedEventSchema,
     ParsedRecordSchema,
 )
+from app.normalization.address import canonical_key
 from app.normalization.gigachat_client import (
     GigaChatClient,
     GigaChatError,
@@ -37,9 +38,12 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT = """You normalize Russian planned power outage records.
 Return ONLY a valid JSON object. No prose, no markdown, no ``` fences.
 Do not invent missing house numbers or addresses.
-Use UTC ISO-8601 datetimes. Normalize address words: "ул." -> "улица", "пр-т" -> "проспект".
+Use UTC ISO-8601 datetimes.
 Classify event_type as one of: power_outage, maintenance, infrastructure_failure, other.
 Set confidence from 0.0 to 1.0. Lower it when city, street, or time is missing.
+Return structured address parts; text-level normalization (abbreviations, casing,
+canonical key) happens deterministically downstream — keep `city`, `street`,
+`building` as you read them, just split them apart.
 
 Expected JSON shape:
 {
@@ -48,7 +52,6 @@ Expected JSON shape:
   "end_time": "ISO8601 | null",
   "location": {
     "raw": "string",
-    "normalized": "string | null",
     "city": "string | null",
     "street": "string | null",
     "building": "string | null"
@@ -201,6 +204,9 @@ def _build_event(record: ParsedRecordSchema, data: dict[str, Any]) -> Normalized
 
     location = data.get("location") if isinstance(data.get("location"), dict) else {}
     raw_location = location.get("raw") or _raw_location(record)
+    city = _clean(location.get("city")) or record.location_city
+    street = _clean(location.get("street")) or record.location_street
+    building = _clean(location.get("building"))
 
     return NormalizedEventSchema(
         event_id=uuid4(),
@@ -210,10 +216,13 @@ def _build_event(record: ParsedRecordSchema, data: dict[str, Any]) -> Normalized
         end_time=_parse_dt(data.get("end_time")) or record.end_time,
         location=LocationSchema(
             raw=raw_location,
-            normalized=_clean(location.get("normalized")),
-            city=_clean(location.get("city")) or record.location_city,
-            street=_clean(location.get("street")) or record.location_street,
-            building=_clean(location.get("building")),
+            # Deterministic key, computed from structured fields. LLM's own
+            # `normalized` string is dropped — different runs produced
+            # different casings/spacings and dedup compared them with `==`.
+            normalized=canonical_key(city, street, building),
+            city=city,
+            street=street,
+            building=building,
         ),
         reason=_clean(data.get("reason")) or record.reason,
         sources=[record.raw_record_id],
