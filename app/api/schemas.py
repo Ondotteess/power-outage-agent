@@ -97,6 +97,7 @@ class OfficeImpactOut(BaseModel):
     impact_level: str
     match_strategy: str
     match_score: float
+    match_explanation: list[str] = Field(default_factory=list)
     detected_at: datetime
 
 
@@ -107,6 +108,9 @@ class MapOfficeImpactOut(BaseModel):
     starts_at: datetime
     ends_at: datetime | None
     event_type: str | None = None
+    match_strategy: str | None = None
+    match_score: float | None = None
+    match_explanation: list[str] = Field(default_factory=list)
 
 
 class MapOfficeOut(BaseModel):
@@ -198,6 +202,18 @@ class ActivityEvent(BaseModel):
     source: str | None = None
     message: str
     at: datetime
+
+
+class EventLogOut(BaseModel):
+    id: UUID
+    event_type: str
+    severity: str
+    message: str
+    source: str | None = None
+    task_id: UUID | None = None
+    trace_id: UUID | None = None
+    payload: dict = Field(default_factory=dict)
+    created_at: datetime
 
 
 class NormalizationQuality(BaseModel):

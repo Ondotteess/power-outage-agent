@@ -4,7 +4,7 @@ Runs as a separate process from the pipeline worker:
 
     uvicorn app.api.app:app --reload --port 8000
 
-CORS is open for dev so the Vite dev server (default :5173) can reach the API.
+CORS origins are explicit and configured via CORS_ALLOW_ORIGINS.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers import (
     dashboard,
+    logs,
     map,
     metrics,
     notifications,
@@ -27,11 +28,16 @@ from app.api.routers import (
     sources,
     tasks,
 )
+from app.config import settings
 from app.db.engine import async_session_factory, init_db
 from app.db.repositories import OfficeStore
 from app.matching.defaults import DEFAULT_OFFICES
 
 logger = logging.getLogger(__name__)
+
+
+def _cors_origins() -> list[str]:
+    return [origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()]
 
 
 @asynccontextmanager
@@ -57,13 +63,14 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_cors_origins(),
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
     app.include_router(dashboard.router)
+    app.include_router(logs.router)
     app.include_router(map.router)
     app.include_router(metrics.router)
     app.include_router(offices.router)

@@ -15,12 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     DedupEvent,
+    EventLog,
     LLMCall,
     NormalizedEvent,
     Notification,
     Office,
     OfficeImpact,
     ParsedRecord,
+    QueueDepthSnapshot,
     RawRecord,
     Source,
     TaskRecord,
@@ -88,6 +90,27 @@ async def last_fetch_per_source(session: AsyncSession) -> dict[UUID, datetime]:
         select(RawRecord.source_id, func.max(RawRecord.fetched_at)).group_by(RawRecord.source_id)
     )
     return {row[0]: row[1] for row in result.all() if row[0] is not None}
+
+
+async def source_success_rates(session: AsyncSession, since: datetime) -> dict[UUID, float]:
+    result = await session.execute(
+        select(TaskRecord.payload, TaskRecord.status)
+        .where(TaskRecord.task_type == "fetch_source")
+        .where(TaskRecord.updated_at >= since)
+    )
+    totals: dict[UUID, int] = {}
+    successes: dict[UUID, int] = {}
+    for payload, status in result.all():
+        if not isinstance(payload, dict) or not payload.get("source_id"):
+            continue
+        try:
+            source_id = UUID(str(payload["source_id"]))
+        except ValueError:
+            continue
+        totals[source_id] = totals.get(source_id, 0) + 1
+        if status == "done":
+            successes[source_id] = successes.get(source_id, 0) + 1
+    return {source_id: successes.get(source_id, 0) / total for source_id, total in totals.items()}
 
 
 async def list_parsed(
@@ -377,7 +400,7 @@ async def normalizer_path_counts(
     """Count NORMALIZE_EVENT tasks by which normalizer produced their output."""
     stmt = (
         select(TaskRecord.normalizer_path, func.count(TaskRecord.id))
-        .where(TaskRecord.task_type == "NORMALIZE_EVENT")
+        .where(TaskRecord.task_type == "normalize_event")
         .where(TaskRecord.normalizer_path.is_not(None))
         .group_by(TaskRecord.normalizer_path)
     )
@@ -385,3 +408,30 @@ async def normalizer_path_counts(
         stmt = stmt.where(TaskRecord.completed_at >= since)
     result = await session.execute(stmt)
     return {str(row[0]): int(row[1]) for row in result.all()}
+
+
+async def list_queue_depth_snapshots(
+    session: AsyncSession,
+    *,
+    since: datetime,
+) -> list[QueueDepthSnapshot]:
+    result = await session.execute(
+        select(QueueDepthSnapshot)
+        .where(QueueDepthSnapshot.created_at >= since)
+        .order_by(QueueDepthSnapshot.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def list_event_logs(
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    severity: str | None = None,
+) -> list[EventLog]:
+    stmt = select(EventLog).order_by(desc(EventLog.created_at)).limit(limit).offset(offset)
+    if severity:
+        stmt = stmt.where(EventLog.severity == severity.upper())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
