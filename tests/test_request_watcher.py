@@ -135,6 +135,7 @@ async def test_request_watcher_turns_retry_request_into_failed_task_retry():
     assert len(submitted) == 1
     assert submitted[0].task_type == TaskType.PARSE_CONTENT
     assert submitted[0].task_id == row.id
+    assert submitted[0].trace_id == row.trace_id
     assert submitted[0].attempt == 0
     assert retry_store.done == [(request.id, row.id)]
     assert retry_store.failed == []

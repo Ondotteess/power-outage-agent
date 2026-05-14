@@ -54,7 +54,7 @@ async def test_dispatch_to_registered_handler_marks_running_then_done():
     assert statuses == ["pending", "running", "done"]
 
 
-async def test_task_with_no_handler_is_dropped_with_warning():
+async def test_task_with_no_handler_is_marked_failed():
     queue = TaskQueue()
     store = FakeTaskStore()
     dispatcher = Dispatcher(queue, store)
@@ -65,8 +65,8 @@ async def test_task_with_no_handler_is_dropped_with_warning():
     runner = await _run_until_idle(dispatcher, queue)
     await _stop(runner)
 
-    # only the initial 'pending' from submit; no running/done/failed
-    assert store.statuses_for(task.task_id) == ["pending"]
+    assert store.statuses_for(task.task_id) == ["pending", "failed"]
+    assert store.calls[-1][2] == f"No handler registered for task type: {TaskType.PARSE_CONTENT}"
 
 
 async def test_handler_failure_retries_with_zero_backoff():

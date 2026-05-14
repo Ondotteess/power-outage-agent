@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import (
     DedupEvent,
+    EventLog,
     LLMCall,
     NormalizedEvent,
     Notification,
@@ -16,6 +19,7 @@ from app.db.models import (
     OfficeImpact,
     ParsedRecord,
     PollRequest,
+    QueueDepthSnapshot,
     RawRecord,
     RetryRequest,
     Source,
@@ -28,7 +32,7 @@ from app.models.schemas import (
     ParsedRecordSchema,
     RawRecordSchema,
 )
-from app.workers.queue import Task
+from app.workers.queue import Task, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -61,17 +65,21 @@ class TaskStore:
                     input_hash=task.input_hash,
                     status=status,
                     attempt=task.attempt,
+                    max_attempts=task.max_attempts,
                     payload=task.payload,
                     error=error,
                     trace_id=task.trace_id,
+                    next_run_at=task.available_at,
                 )
                 session.add(record)
             else:
                 existing.status = status
                 existing.attempt = task.attempt
+                existing.max_attempts = task.max_attempts
                 existing.payload = task.payload
                 existing.error = error
                 existing.updated_at = now
+                existing.next_run_at = task.available_at
                 # Per-stage timing. `started_at` is reset on each "running"
                 # transition so retries measure the latest attempt, not the
                 # very first one. `completed_at` + `duration_ms` finalize on
@@ -90,6 +98,63 @@ class TaskStore:
             await session.commit()
         logger.debug("TaskStore  upsert done  task_id=%s  status=%s", task.task_id, status)
 
+    async def claim_next(self) -> Task | None:
+        """Atomically claim the next runnable pending task for a DB-backed worker."""
+        now = datetime.now(UTC)
+        async with self._sf() as session, session.begin():
+            result = await session.execute(
+                select(TaskRecord)
+                .where(TaskRecord.status == "pending")
+                .where(or_(TaskRecord.next_run_at.is_(None), TaskRecord.next_run_at <= now))
+                .order_by(TaskRecord.created_at)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            record = result.scalar_one_or_none()
+            if record is None:
+                return None
+
+            record.status = "running"
+            record.started_at = now
+            record.completed_at = None
+            record.duration_ms = None
+            record.updated_at = now
+
+            return Task(
+                task_type=TaskType(record.task_type),
+                payload=dict(record.payload or {}),
+                trace_id=record.trace_id,
+                task_id=record.id,
+                attempt=record.attempt,
+                max_attempts=record.max_attempts,
+                available_at=record.next_run_at,
+            )
+
+    async def count_active(self) -> int:
+        async with self._sf() as session:
+            result = await session.execute(
+                select(func.count(TaskRecord.id)).where(
+                    TaskRecord.status.in_(("pending", "running"))
+                )
+            )
+            return result.scalar() or 0
+
+    async def seconds_until_next_pending(self) -> float | None:
+        now = datetime.now(UTC)
+        async with self._sf() as session:
+            result = await session.execute(
+                select(TaskRecord.next_run_at)
+                .where(TaskRecord.status == "pending")
+                .where(TaskRecord.next_run_at.is_not(None))
+                .where(TaskRecord.next_run_at > now)
+                .order_by(TaskRecord.next_run_at)
+                .limit(1)
+            )
+            next_run_at = result.scalar_one_or_none()
+        if next_run_at is None:
+            return None
+        return max(0.0, (next_run_at - now).total_seconds())
+
     async def set_normalizer_path(self, task_id: UUID, path: str) -> None:
         """Record which normalizer (`automaton` or `llm_fallback`) produced the
         event for a NORMALIZE_EVENT task. Used by the Metrics page to show the
@@ -103,16 +168,32 @@ class TaskStore:
             await session.commit()
 
     async def fail_incomplete(self, reason: str) -> int:
-        """Mark tasks abandoned by a previous process as failed.
-
-        The runtime queue is in memory, so pending/running rows cannot be resumed
-        after a restart yet. Keeping them as active makes the admin UI look stuck.
-        """
+        """Legacy/manual escape hatch: move active tasks to DLQ."""
         async with self._sf() as session:
             result = await session.execute(
                 update(TaskRecord)
                 .where(TaskRecord.status.in_(("pending", "running")))
                 .values(status="failed", error=reason, updated_at=datetime.now(UTC))
+            )
+            await session.commit()
+        return result.rowcount or 0
+
+    async def requeue_incomplete(self, reason: str) -> int:
+        """Make tasks abandoned by a previous process runnable again."""
+        now = datetime.now(UTC)
+        async with self._sf() as session:
+            result = await session.execute(
+                update(TaskRecord)
+                .where(TaskRecord.status.in_(("pending", "running")))
+                .values(
+                    status="pending",
+                    error=reason,
+                    started_at=None,
+                    completed_at=None,
+                    duration_ms=None,
+                    next_run_at=now,
+                    updated_at=now,
+                )
             )
             await session.commit()
         return result.rowcount or 0
@@ -245,18 +326,42 @@ class ParsedStore:
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._sf = session_factory
 
-    async def save_many(self, records: list[ParsedRecordSchema]) -> None:
+    async def save_many(self, records: list[ParsedRecordSchema]) -> list[ParsedRecordSchema]:
         if not records:
-            return
+            return []
         logger.debug("ParsedStore  save_many  count=%d", len(records))
+        persisted: list[ParsedRecordSchema] = []
         async with self._sf() as session:
             for r in records:
+                fingerprint = _parsed_fingerprint(r)
+                result = await session.execute(
+                    select(ParsedRecord).where(ParsedRecord.fingerprint == fingerprint).limit(1)
+                )
+                existing = result.scalars().first()
+                if existing is not None:
+                    existing.raw_record_id = r.raw_record_id
+                    existing.source_id = r.source_id
+                    existing.external_id = r.external_id
+                    existing.start_time = r.start_time
+                    existing.end_time = r.end_time
+                    existing.location_city = r.location_city
+                    existing.location_district = r.location_district
+                    existing.location_street = r.location_street
+                    existing.location_region_code = r.location_region_code
+                    existing.reason = r.reason
+                    existing.extra = r.extra
+                    existing.trace_id = r.trace_id
+                    existing.extracted_at = r.extracted_at
+                    persisted.append(r.model_copy(update={"id": existing.id}))
+                    continue
+
                 session.add(
                     ParsedRecord(
                         id=r.id,
                         raw_record_id=r.raw_record_id,
                         source_id=r.source_id,
                         external_id=r.external_id,
+                        fingerprint=fingerprint,
                         start_time=r.start_time,
                         end_time=r.end_time,
                         location_city=r.location_city,
@@ -269,14 +374,66 @@ class ParsedStore:
                         extracted_at=r.extracted_at,
                     )
                 )
+                persisted.append(r)
             await session.commit()
-        logger.info("ParsedStore  saved %d parsed record(s)", len(records))
+        logger.info("ParsedStore  persisted %d parsed record(s)", len(persisted))
+        return persisted
 
     async def get_by_id(self, parsed_id: UUID) -> ParsedRecord | None:
         logger.debug("ParsedStore  get_by_id  parsed_id=%s", parsed_id)
         async with self._sf() as session:
             result = await session.execute(select(ParsedRecord).where(ParsedRecord.id == parsed_id))
             return result.scalar_one_or_none()
+
+
+class EventLogStore:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def record(
+        self,
+        *,
+        event_type: str,
+        severity: str,
+        message: str,
+        source: str | None = None,
+        task_id: UUID | None = None,
+        trace_id: UUID | None = None,
+        payload: dict | None = None,
+    ) -> None:
+        async with self._sf() as session:
+            session.add(
+                EventLog(
+                    event_type=event_type,
+                    severity=severity,
+                    message=message,
+                    source=source,
+                    task_id=task_id,
+                    trace_id=trace_id,
+                    payload=payload or {},
+                )
+            )
+            await session.commit()
+
+
+class QueueSnapshotStore:
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def record_current(self) -> None:
+        async with self._sf() as session:
+            result = await session.execute(
+                select(TaskRecord.status, func.count(TaskRecord.id)).group_by(TaskRecord.status)
+            )
+            counts = {status: int(count) for status, count in result.all()}
+            session.add(
+                QueueDepthSnapshot(
+                    pending=counts.get("pending", 0),
+                    running=counts.get("running", 0),
+                    failed=counts.get("failed", 0),
+                )
+            )
+            await session.commit()
 
 
 class NormalizedEventStore:
@@ -323,6 +480,29 @@ class NormalizedEventStore:
                 select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
             )
             return result.scalar_one_or_none()
+
+    async def get_by_parsed_record_id(self, parsed_record_id: UUID) -> NormalizedEvent | None:
+        logger.debug(
+            "NormalizedEventStore  get_by_parsed_record_id  parsed_record_id=%s",
+            parsed_record_id,
+        )
+        async with self._sf() as session:
+            result = await session.execute(
+                select(NormalizedEvent).where(
+                    NormalizedEvent.parsed_record_id == parsed_record_id
+                )
+            )
+            return result.scalar_one_or_none()
+
+    async def add_sources(self, event_id: UUID, sources: list[UUID], trace_id: UUID) -> None:
+        async with self._sf() as session:
+            event = await session.get(NormalizedEvent, event_id)
+            if event is None:
+                return
+            event.sources = _merge_source_lists(event.sources, [str(source) for source in sources])
+            event.trace_id = trace_id
+            event.normalized_at = datetime.now(UTC)
+            await session.commit()
 
 
 class OfficeStore:
@@ -397,6 +577,7 @@ class OfficeImpactStore:
                             impact_level=str(impact.impact_level),
                             match_strategy=impact.match_strategy,
                             match_score=impact.match_score,
+                            match_explanation=impact.match_explanation,
                             trace_id=trace_id,
                             detected_at=impact.detected_at,
                         )
@@ -410,6 +591,7 @@ class OfficeImpactStore:
                 if impact.match_score >= (existing.match_score or 0.0):
                     existing.match_strategy = impact.match_strategy
                     existing.match_score = impact.match_score
+                    existing.match_explanation = impact.match_explanation
                 existing.trace_id = trace_id
                 existing.detected_at = impact.detected_at
                 saved += 1
@@ -489,12 +671,13 @@ class PollRequestStore:
         return request.id
 
     async def claim_pending(self, *, limit: int = 20) -> list[PollRequest]:
-        async with self._sf() as session:
+        async with self._sf() as session, session.begin():
             result = await session.execute(
                 select(PollRequest)
                 .where(PollRequest.status == "pending")
                 .order_by(PollRequest.created_at)
                 .limit(limit)
+                .with_for_update(skip_locked=True)
             )
             requests = list(result.scalars().all())
             if not requests:
@@ -503,7 +686,6 @@ class PollRequestStore:
             for request in requests:
                 request.status = "processing"
                 request.updated_at = now
-            await session.commit()
         return requests
 
     async def mark_done(self, request_id: UUID, *, task_id: UUID) -> None:
@@ -559,12 +741,13 @@ class RetryRequestStore:
         return request.id
 
     async def claim_pending(self, *, limit: int = 20) -> list[RetryRequest]:
-        async with self._sf() as session:
+        async with self._sf() as session, session.begin():
             result = await session.execute(
                 select(RetryRequest)
                 .where(RetryRequest.status == "pending")
                 .order_by(RetryRequest.created_at)
                 .limit(limit)
+                .with_for_update(skip_locked=True)
             )
             requests = list(result.scalars().all())
             if not requests:
@@ -573,7 +756,6 @@ class RetryRequestStore:
             for request in requests:
                 request.status = "processing"
                 request.updated_at = now
-            await session.commit()
         return requests
 
     async def mark_done(self, request_id: UUID, *, new_task_id: UUID) -> None:
@@ -629,24 +811,28 @@ async def _find_existing_normalized_event(
         if existing is not None:
             return existing
 
-    stmt = (
-        select(NormalizedEvent)
-        .where(NormalizedEvent.event_type == str(event.event_type))
-        .where(NormalizedEvent.start_time == event.start_time)
-        .limit(1)
-    )
-    if event.end_time is None:
-        stmt = stmt.where(NormalizedEvent.end_time.is_(None))
-    else:
-        stmt = stmt.where(NormalizedEvent.end_time == event.end_time)
-
     if event.location.normalized:
-        stmt = stmt.where(NormalizedEvent.location_normalized == event.location.normalized)
+        stmt = (
+            select(NormalizedEvent)
+            .where(NormalizedEvent.location_normalized == event.location.normalized)
+            .order_by(desc(NormalizedEvent.start_time))
+            .limit(50)
+        )
     else:
-        stmt = stmt.where(NormalizedEvent.location_raw == event.location.raw)
+        stmt = (
+            select(NormalizedEvent)
+            .where(NormalizedEvent.location_raw == event.location.raw)
+            .order_by(desc(NormalizedEvent.start_time))
+            .limit(50)
+        )
 
     result = await session.execute(stmt)
-    return result.scalars().first()
+    for existing in result.scalars().all():
+        if _compatible_event_type(existing.event_type, str(event.event_type)) and _windows_match(
+            existing, event
+        ):
+            return existing
+    return None
 
 
 def _new_normalized_event(
@@ -676,7 +862,7 @@ def _dedup_strategy(existing: NormalizedEvent, event: NormalizedEventSchema) -> 
     if event.parsed_record_id is not None and existing.parsed_record_id == event.parsed_record_id:
         return "parsed_record"
     if (
-        existing.event_type == str(event.event_type)
+        _compatible_event_type(existing.event_type, str(event.event_type))
         and existing.start_time == event.start_time
         and existing.end_time == event.end_time
         and (
@@ -685,6 +871,10 @@ def _dedup_strategy(existing: NormalizedEvent, event: NormalizedEventSchema) -> 
         )
     ):
         return "exact_window"
+    if _windows_overlap(existing, event):
+        return "overlap_window"
+    if _windows_match(existing, event):
+        return "time_tolerance"
     return "composite"
 
 
@@ -701,12 +891,14 @@ def _merge_normalized_event(
     if existing.parsed_record_id is None:
         existing.parsed_record_id = event.parsed_record_id
 
+    merged_start = min(existing.start_time, event.start_time)
+    merged_end = _merged_end_time(existing.end_time, event.end_time)
     incoming_confidence = event.confidence or 0.0
     current_confidence = existing.confidence or 0.0
     if incoming_confidence >= current_confidence:
         existing.event_type = str(event.event_type)
-        existing.start_time = event.start_time
-        existing.end_time = event.end_time
+        existing.start_time = merged_start
+        existing.end_time = merged_end
         existing.location_raw = event.location.raw
         existing.location_normalized = event.location.normalized
         existing.location_city = event.location.city
@@ -714,12 +906,77 @@ def _merge_normalized_event(
         existing.location_building = event.location.building
         existing.reason = event.reason
         existing.confidence = event.confidence
-    elif existing.reason is None and event.reason is not None:
+        return
+
+    existing.start_time = merged_start
+    existing.end_time = merged_end
+    if existing.reason is None and event.reason is not None:
         existing.reason = event.reason
+
+
+_DEDUP_TIME_TOLERANCE = timedelta(minutes=15)
+_OUTAGE_COMPATIBLE_TYPES = {"power_outage", "maintenance", "infrastructure_failure"}
+
+
+def _compatible_event_type(existing: str, incoming: str) -> bool:
+    if existing == incoming:
+        return True
+    return existing in _OUTAGE_COMPATIBLE_TYPES and incoming in _OUTAGE_COMPATIBLE_TYPES
+
+
+def _windows_match(existing: NormalizedEvent, event: NormalizedEventSchema) -> bool:
+    return _windows_overlap(existing, event) or (
+        abs(existing.start_time - event.start_time) <= _DEDUP_TIME_TOLERANCE
+        and _nullable_dt_close(existing.end_time, event.end_time)
+    )
+
+
+def _windows_overlap(existing: NormalizedEvent, event: NormalizedEventSchema) -> bool:
+    existing_end = existing.end_time or existing.start_time
+    incoming_end = event.end_time or event.start_time
+    return (
+        existing.start_time <= incoming_end + _DEDUP_TIME_TOLERANCE
+        and event.start_time <= existing_end + _DEDUP_TIME_TOLERANCE
+    )
+
+
+def _nullable_dt_close(existing: datetime | None, incoming: datetime | None) -> bool:
+    if existing is None or incoming is None:
+        return existing is None and incoming is None
+    return abs(existing - incoming) <= _DEDUP_TIME_TOLERANCE
+
+
+def _merged_end_time(existing: datetime | None, incoming: datetime | None) -> datetime | None:
+    if existing is None or incoming is None:
+        return existing or incoming
+    return max(existing, incoming)
 
 
 def _event_source_strings(event: NormalizedEventSchema) -> list[str]:
     return [str(source_id) for source_id in event.sources]
+
+
+def _parsed_fingerprint(record: ParsedRecordSchema) -> str:
+    """Stable parsed-record key used to make reparsing idempotent."""
+    if record.source_id is not None and record.external_id:
+        payload = {
+            "source_id": str(record.source_id),
+            "external_id": record.external_id,
+        }
+    else:
+        payload = {
+            "source_id": str(record.source_id) if record.source_id else None,
+            "start_time": record.start_time.isoformat() if record.start_time else None,
+            "end_time": record.end_time.isoformat() if record.end_time else None,
+            "city": record.location_city,
+            "district": record.location_district,
+            "street": record.location_street,
+            "region": record.location_region_code,
+            "reason": record.reason,
+            "extra": record.extra,
+        }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _merge_source_lists(existing: object, incoming: list[str]) -> list[str]:

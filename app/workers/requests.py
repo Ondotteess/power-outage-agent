@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Protocol
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from app.workers.queue import Task, TaskType
 
@@ -38,7 +38,7 @@ class RetryRequestStoreProtocol(Protocol):
 
 
 class RequestWatcher:
-    """Turns admin API DB requests into real in-memory queue tasks."""
+    """Turns admin API DB requests into durable pipeline tasks."""
 
     def __init__(
         self,
@@ -119,7 +119,7 @@ class RequestWatcher:
                 task = Task(
                     task_type=TaskType(row.task_type),
                     payload=dict(row.payload or {}),
-                    trace_id=uuid4(),
+                    trace_id=row.trace_id,
                     task_id=row.id,
                     attempt=0,
                 )

@@ -12,6 +12,7 @@ from app.alerts.telegram import TelegramSender
 from app.config import settings
 from app.db.engine import async_session_factory, init_db
 from app.db.repositories import (
+    EventLogStore,
     LLMCallStore,
     NormalizedEventStore,
     NotificationStore,
@@ -19,6 +20,7 @@ from app.db.repositories import (
     OfficeStore,
     ParsedStore,
     PollRequestStore,
+    QueueSnapshotStore,
     RawStore,
     RetryRequestStore,
     SourceStore,
@@ -35,8 +37,9 @@ from app.workers.dispatcher import Dispatcher
 from app.workers.matcher import OfficeMatchHandler
 from app.workers.normalizer import NormalizationHandler
 from app.workers.notifier import NotificationHandler
+from app.workers.observability import QueueSnapshotter
 from app.workers.parser import ParseHandler
-from app.workers.queue import Task, TaskQueue, TaskType
+from app.workers.queue import DatabaseTaskQueue, Task, TaskType
 from app.workers.requests import RequestWatcher
 from app.workers.scheduler import Scheduler, SourceConfig
 
@@ -53,6 +56,7 @@ _DEFAULT_SOURCES = [
         "poll_interval_seconds": 21600,  # 6 h
         "parser_profile": {
             "parser": "rosseti_sib",
+            "region": "RU-SIB",
             "date_filter_days": 4,
             "normalize_enabled": False,
         },
@@ -64,6 +68,7 @@ _DEFAULT_SOURCES = [
         "poll_interval_seconds": 21600,  # 6 h
         "parser_profile": {
             "parser": "rosseti_tomsk",
+            "region": "RU-TOM",
             "date_filter_days": 4,
             "normalize_limit": 3,
             "verify_ssl": False,  # site uses Russian state root CA not in certifi bundle
@@ -81,6 +86,7 @@ _DEFAULT_SOURCES = [
         "poll_interval_seconds": 21600,  # 6 h
         "parser_profile": {
             "parser": "eseti",
+            "region": "RU-NVS",
             "date_filter_days": 4,
             "normalize_enabled": False,
         },
@@ -340,11 +346,11 @@ async def main() -> None:
             run_id,
         )
 
-    queue = TaskQueue()
     task_store = TaskStore(async_session_factory)
-    stale_tasks = await task_store.fail_incomplete("abandoned by previous pipeline process")
+    queue = DatabaseTaskQueue(task_store)
+    stale_tasks = await task_store.requeue_incomplete("requeued by pipeline restart")
     if stale_tasks:
-        logger.warning("Marked %d stale pending/running task(s) as failed", stale_tasks)
+        logger.warning("Requeued %d pending/running task(s) from previous process", stale_tasks)
     poll_request_store = PollRequestStore(async_session_factory)
     retry_request_store = RetryRequestStore(async_session_factory)
     stale_poll_requests = await poll_request_store.fail_incomplete(
@@ -372,7 +378,9 @@ async def main() -> None:
         "NormalizedEventStore, OfficeStore, OfficeImpactStore"
     )
 
-    dispatcher = Dispatcher(queue, task_store)
+    event_log_store = EventLogStore(async_session_factory)
+    queue_snapshot_store = QueueSnapshotStore(async_session_factory)
+    dispatcher = Dispatcher(queue, task_store, event_store=event_log_store)
 
     collector_handler = CollectorHandler(
         dispatcher.submit,
@@ -480,7 +488,13 @@ async def main() -> None:
         poll_requests=poll_request_store,
         retry_requests=retry_request_store,
     )
-    await asyncio.gather(scheduler.run(), dispatcher.run(), request_watcher.run())
+    queue_snapshotter = QueueSnapshotter(queue_snapshot_store)
+    await asyncio.gather(
+        scheduler.run(),
+        dispatcher.run(),
+        request_watcher.run(),
+        queue_snapshotter.run(),
+    )
 
 
 if __name__ == "__main__":
