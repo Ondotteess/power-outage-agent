@@ -24,6 +24,7 @@ from app.db.repositories import (
     TaskStore,
 )
 from app.matching.defaults import DEFAULT_OFFICES
+from app.normalization.automaton import AutomatonNormalizer, FallbackNormalizer
 from app.normalization.demo import DemoNormalizer
 from app.normalization.llm import LLMNormalizer
 from app.parsers.demo_collectors import DemoHtmlCollector, DemoJsonCollector
@@ -297,7 +298,10 @@ async def main() -> None:
     llm_normalization_max_per_raw = settings.llm_normalization_max_per_raw
     run_once = args.smoke_e2e or args.demo_e2e
     include_inactive_sources = False
-    normalizer = LLMNormalizer()
+    # Two-stage normalizer: deterministic Token-FSA first, GigaChat only on
+    # low-confidence parses. Demo mode swaps GigaChat for the offline
+    # DemoNormalizer below — same fallback shape, different second stage.
+    fallback_normalizer: object = LLMNormalizer()
     demo_step_delay = 0.0
     demo_emit_unmatched = False
     collectors = None
@@ -318,7 +322,7 @@ async def main() -> None:
         collector_profile_override = {"paginate": None}
         llm_normalization_enabled = True
         llm_normalization_max_per_raw = limit
-        normalizer = DemoNormalizer()
+        fallback_normalizer = DemoNormalizer()
         demo_step_delay = max(0.0, args.demo_step_delay)
         demo_emit_unmatched = True
         run_id = str(uuid4())
@@ -397,6 +401,11 @@ async def main() -> None:
         _with_delay(parse_handler.handle, demo_step_delay),
     )
 
+    normalizer = FallbackNormalizer(
+        AutomatonNormalizer(),
+        fallback_normalizer,
+        threshold=settings.normalizer_fallback_threshold,
+    )
     normalization_handler = NormalizationHandler(
         parsed_store,
         normalized_store,

@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # paid model calls by accident.
     llm_normalization_enabled: bool = False
     llm_normalization_max_per_raw: int = 5
+    # Confidence threshold for the deterministic Token-FSA normalizer. Below
+    # this score the FallbackNormalizer escalates to the LLM. 1.0 disables the
+    # automaton path entirely; 0.0 disables the LLM fallback.
+    normalizer_fallback_threshold: float = 0.6
 
     # GigaChat — currently the only active LLM provider in the normalizer.
     # Provide EITHER `gigachat_auth_key` (base64 of "client_id:client_secret",
