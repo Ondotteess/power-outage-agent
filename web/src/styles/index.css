@@ -10,6 +10,8 @@
   }
 
   body {
+    background: #f7f7f7;
+    color: #111111;
     font-feature-settings:
       "cv02" on,
       "cv03" on,
@@ -22,13 +24,13 @@
     height: 10px;
   }
   *::-webkit-scrollbar-thumb {
-    background: #1f2937;
+    background: #c7c7c7;
     border-radius: 8px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: #374151;
+    background: #9f9f9f;
     background-clip: padding-box;
     border: 2px solid transparent;
   }
@@ -39,7 +41,7 @@
 
 @layer components {
   .card {
-    @apply rounded-xl border border-line bg-bg-surface shadow-card;
+    @apply rounded-lg border border-line bg-bg-surface shadow-card;
   }
   .card-header {
     @apply flex items-center justify-between border-b border-line/60 px-4 py-3;
@@ -55,17 +57,17 @@
   }
 
   .btn {
-    @apply inline-flex items-center gap-2 rounded-md border border-line bg-bg-elevated px-3 py-1.5 text-sm text-ink transition-colors hover:bg-bg-surface hover:border-line/80 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex items-center gap-2 rounded-md border border-line bg-bg-surface px-3 py-1.5 text-sm text-ink transition-colors hover:border-ink hover:bg-bg-elevated disabled:cursor-not-allowed disabled:opacity-60;
   }
   .btn-primary {
-    @apply border-accent-teal/40 bg-accent-teal/10 text-accent-teal hover:bg-accent-teal/15 hover:border-accent-teal/60;
+    @apply border-ink bg-ink text-bg-surface hover:border-ink hover:bg-ink/90;
   }
   .btn-ghost {
     @apply border-transparent bg-transparent hover:bg-bg-elevated;
   }
 
   .input {
-    @apply h-9 rounded-md border border-line bg-bg-elevated px-3 text-sm text-ink placeholder:text-ink-dim focus:outline-none focus:ring-1 focus:ring-accent-teal/40 focus:border-accent-teal/40;
+    @apply h-9 rounded-md border border-line bg-bg-surface px-3 text-sm text-ink placeholder:text-ink-dim focus:border-ink focus:outline-none focus:ring-1 focus:ring-ink/20;
   }
 
   .table-wrap {
@@ -102,7 +104,7 @@
   }
 
   .office-map .leaflet-tooltip-top::before {
-    border-top-color: #111827;
+    border-top-color: #ffffff;
   }
 
   .office-map-popup .leaflet-popup-content-wrapper,

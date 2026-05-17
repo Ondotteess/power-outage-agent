@@ -13,7 +13,6 @@ from app.config import settings
 from app.db.engine import async_session_factory, init_db
 from app.db.repositories import (
     EventLogStore,
-    LLMCallStore,
     NormalizedEventStore,
     NotificationStore,
     OfficeImpactStore,
@@ -27,9 +26,8 @@ from app.db.repositories import (
     TaskStore,
 )
 from app.matching.defaults import DEFAULT_OFFICES
-from app.normalization.automaton import AutomatonNormalizer, FallbackNormalizer
+from app.normalization.automaton import AutomatonNormalizer, FallbackNormalizer, RegexNormalizer
 from app.normalization.demo import DemoNormalizer
-from app.normalization.llm import LLMNormalizer
 from app.parsers.demo_collectors import DemoHtmlCollector, DemoJsonCollector
 from app.workers.collector import CollectorHandler
 from app.workers.deduplicator import DeduplicationHandler
@@ -59,7 +57,6 @@ _DEFAULT_SOURCES = [
             "parser": "rosseti_sib",
             "region": "RU-SIB",
             "date_filter_days": 4,
-            "normalize_enabled": False,
         },
     },
     {
@@ -71,7 +68,6 @@ _DEFAULT_SOURCES = [
             "parser": "rosseti_tomsk",
             "region": "RU-TOM",
             "date_filter_days": 4,
-            "normalize_limit": 3,
             "verify_ssl": False,  # site uses Russian state root CA not in certifi bundle
             # Server-side date filter (date_start/date_end) returns empty pages when applied
             # via query string — likely the form uses POST or JS-side filtering. Skip it and
@@ -89,7 +85,6 @@ _DEFAULT_SOURCES = [
             "parser": "eseti",
             "region": "RU-NVS",
             "date_filter_days": 4,
-            "normalize_enabled": False,
         },
     },
 ]
@@ -110,8 +105,8 @@ def _parse_args() -> argparse.Namespace:
         "--smoke-e2e",
         action="store_true",
         help=(
-            "Run every configured source once, force LLM normalization on, "
-            "normalize only N parsed records per source, then exit."
+            "Run every configured source once, enable regex fallback, "
+            "then exit after the queue drains."
         ),
     )
     parser.add_argument(
@@ -119,14 +114,14 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         metavar="N",
-        help="Number of parsed records per source to normalize in --smoke-e2e mode.",
+        help="Legacy smoke budget knob; regex fallback is local and no longer needs it.",
     )
     parser.add_argument(
         "--demo-e2e",
         action="store_true",
         help=(
             "Run a deterministic end-to-end demo: 10 local threat records per active source, "
-            "no external sites or LLM credentials required, then exit."
+            "no external sites or model credentials required, then exit."
         ),
     )
     parser.add_argument(
@@ -268,12 +263,9 @@ async def main() -> None:
 
     logger.info("=== Power Outage Agent starting (log_level=%s) ===", args.log_level)
     logger.debug(
-        "Config: db=%s  llm_base_url=%s  llm_model=%s  llm_enabled=%s  llm_max_per_raw=%d",
+        "Config: db=%s  regex_fallback_threshold=%.2f",
         _redact_dsn(settings.database_url),
-        settings.llm_base_url,
-        settings.llm_model,
-        settings.llm_normalization_enabled,
-        settings.llm_normalization_max_per_raw,
+        settings.normalizer_fallback_threshold,
     )
 
     logger.info("Initializing database")
@@ -302,35 +294,33 @@ async def main() -> None:
 
     smoke_profile_override: dict | None = None
     collector_profile_override: dict | None = None
-    llm_normalization_enabled = settings.llm_normalization_enabled
-    llm_normalization_max_per_raw = settings.llm_normalization_max_per_raw
+    fallback_normalization_enabled = True
+    fallback_normalization_max_per_raw: int | None = None
     run_once = args.smoke_e2e or args.demo_e2e
     include_inactive_sources = False
-    # Two-stage normalizer: deterministic Token-FSA first, GigaChat only on
-    # low-confidence parses. Demo mode swaps GigaChat for the offline
-    # DemoNormalizer below — same fallback shape, different second stage.
-    llm_call_store = LLMCallStore(async_session_factory)
-    fallback_normalizer: object = LLMNormalizer(call_store=llm_call_store)
+    # Two-stage normalizer: deterministic Token-FSA first, then deterministic
+    # regex recovery on low-confidence parses. No runtime LLM calls are made.
+    fallback_normalizer: object = RegexNormalizer()
     demo_step_delay = 0.0
     demo_emit_unmatched = False
     collectors = None
     if args.smoke_e2e:
         limit = max(0, args.smoke_normalize_limit)
-        smoke_profile_override = {"normalize_enabled": True, "normalize_limit": limit}
-        llm_normalization_enabled = True
-        llm_normalization_max_per_raw = limit
+        smoke_profile_override = {"normalize_enabled": True}
+        fallback_normalization_enabled = True
+        fallback_normalization_max_per_raw = None
         include_inactive_sources = True
         logger.warning(
             "Smoke E2E mode: all configured sources will be polled once; "
-            "LLM normalization forced on; normalize_limit=%d",
+            "regex fallback enabled; legacy_normalize_limit=%d",
             limit,
         )
     elif args.demo_e2e:
         limit = max(1, args.demo_records_per_source)
-        smoke_profile_override = {"normalize_enabled": True, "normalize_limit": limit}
+        smoke_profile_override = {"normalize_enabled": True}
         collector_profile_override = {"paginate": None}
-        llm_normalization_enabled = True
-        llm_normalization_max_per_raw = limit
+        fallback_normalization_enabled = True
+        fallback_normalization_max_per_raw = None
         fallback_normalizer = DemoNormalizer()
         demo_step_delay = max(0.0, args.demo_step_delay)
         demo_emit_unmatched = True
@@ -400,20 +390,19 @@ async def main() -> None:
         raw_store,
         source_store,
         parsed_store,
-        llm_normalization_enabled=llm_normalization_enabled,
-        llm_normalization_max_per_raw=llm_normalization_max_per_raw,
+        fallback_normalization_enabled=fallback_normalization_enabled,
+        fallback_normalization_max_per_raw=fallback_normalization_max_per_raw,
         parser_profile_override=smoke_profile_override,
-        llm_normalization_max_per_source=(
-            max(0, args.smoke_normalize_limit) if args.smoke_e2e else None
-        ),
+        fallback_normalization_max_per_source=None,
     )
     dispatcher.register(
         TaskType.PARSE_CONTENT,
         _with_delay(parse_handler.handle, demo_step_delay),
     )
 
+    automaton_normalizer = AutomatonNormalizer()
     normalizer = FallbackNormalizer(
-        AutomatonNormalizer(),
+        automaton_normalizer,
         fallback_normalizer,
         threshold=settings.normalizer_fallback_threshold,
     )
@@ -423,6 +412,7 @@ async def main() -> None:
         normalizer,
         dispatcher.submit,
         task_path_store=task_store,
+        deterministic_normalizer=automaton_normalizer,
     )
     dispatcher.register(
         TaskType.NORMALIZE_EVENT,

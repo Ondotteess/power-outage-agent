@@ -1,4 +1,4 @@
-"""Token-FSA address normalizer with optional LLM fallback.
+"""Token-FSA address normalizer with deterministic regex fallback.
 
 The automaton turns a `ParsedRecordSchema` into a `NormalizedEventSchema`
 without any external calls. It classifies each token of the city / street /
@@ -12,12 +12,13 @@ RANGE | PROPER` and runs a small state machine per field:
 Each field parse emits a confidence in [0, 1]. The overall record confidence
 is the minimum across required slots (city + street). If that score falls
 below a threshold — or the FSA can't recover a street at all — the
-`FallbackNormalizer` escalates to the LLM normalizer.
+`FallbackNormalizer` escalates to the regex normalizer.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Protocol
@@ -36,12 +37,70 @@ from app.normalization.address import (
     LOCALITY_WORDS,
     STREET_WORDS,
     canonical_key,
+    normalize_building,
+    normalize_city,
+    normalize_street,
     normalize_text,
+    split_address,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FALLBACK_THRESHOLD = 0.6
+
+_STREET_TYPE_RE = re.compile(
+    r"\b(?P<type>"
+    r"ул(?:ица)?|пр(?:оспект|-?кт|-?т)?|пер(?:еулок)?|проезд|пр-?д|"
+    r"бульвар|б-?р|пл(?:ощадь)?|ш(?:оссе)?|тракт|мкр|микрорайон|"
+    r"наб(?:ережная)?|аллея|тупик"
+    r")\.?\s+(?P<name>[^,;:\n]+)",
+    re.IGNORECASE,
+)
+_STREET_TYPE_TAIL_RE = re.compile(
+    r"(?P<name>[^,;:\n]+?)\s+\b(?P<type>"
+    r"улица|проспект|переулок|проезд|бульвар|площадь|шоссе|тракт|"
+    r"микрорайон|набережная|аллея|тупик"
+    r")\b",
+    re.IGNORECASE,
+)
+_HOUSE_WITH_PREFIX_RE = re.compile(
+    r"\b(?:д(?:ом)?|зд(?:ание)?|строение|стр|корп(?:ус)?|к|влад(?:ение)?|"
+    r"лит(?:ера)?)\.?\s*(?P<house>\d{1,4}(?:/\d{1,4})?[a-zа-я]?"
+    r"(?:\s*[-–—]\s*\d{1,4})?)\b",
+    re.IGNORECASE,
+)
+_TRAILING_HOUSE_RE = re.compile(
+    r"(?P<prefix>.*?\D)\s+(?P<house>\d{1,4}(?:/\d{1,4})?[a-zа-я]?"
+    r"(?:\s*[-–—]\s*\d{1,4})?)\s*$",
+    re.IGNORECASE,
+)
+_ALPHA_RE = re.compile(r"[a-zа-яё]", re.IGNORECASE)
+_ROAD_DISTANCE_RE = re.compile(
+    r"\b(?:км|а/?д|автодор|кадастр|к\.?\s*н|нас(?:еленный)?\s*пункт|"
+    r"разъезд|свертк|тер)\b",
+    re.IGNORECASE,
+)
+_CADASTRAL_RE = re.compile(r"\b\d{2}:\d{2}:\d{3,}", re.IGNORECASE)
+_LOCALITY_RE = re.compile(
+    r"\b(?:г(?:ород)?|с(?:ело)?|п(?:ос(?:елок|ёлок)?)?|пос(?:елок|ёлок)?|"
+    r"пгт|рп|аал|аул|деревня)\.?\s+(?P<name>[^,;:\n]+)",
+    re.IGNORECASE,
+)
+_CITY_PREFIX_RE = re.compile(
+    r"^(?:г(?:ород)?|с(?:ело)?|д(?:еревня)?|п(?:ос(?:елок|ёлок)?)?|"
+    r"пос(?:елок|ёлок)?|пгт|рп|аал|аул)\.?\s+",
+    re.IGNORECASE,
+)
+_ADMIN_MARKERS = (
+    "область",
+    "обл",
+    "край",
+    "республика",
+    "респ",
+    "район",
+    "р-н",
+    "ао",
+)
 
 
 class TokenType(Enum):
@@ -80,7 +139,7 @@ class AutomatonNormalizer:
     """Deterministic ParsedRecord → NormalizedEvent translator.
 
     Runs without network calls. `parse()` exposes confidence so callers can
-    decide whether to escalate to an LLM; `normalize()` keeps the
+    decide whether to escalate to a deterministic fallback; `normalize()` keeps the
     NormalizerProtocol contract for direct use.
     """
 
@@ -139,8 +198,58 @@ class AutomatonNormalizer:
         return AutomatonResult(event=event, confidence=confidence)
 
 
+class RegexNormalizer:
+    """Regex-heavy fallback for messy parser output.
+
+    This is intentionally still deterministic: no network, no model, no token
+    budget. It is more permissive than the Token-FSA and tries to recover
+    address slots from glued fields such as
+    "Красноярский край, Краснотуранский р-н, с Лебяжье, ул Ленина, д 13".
+    """
+
+    async def normalize(self, record: ParsedRecordSchema) -> NormalizedEventSchema | None:
+        return self.parse(record).event
+
+    def parse(self, record: ParsedRecordSchema) -> AutomatonResult:
+        if record.start_time is None:
+            return AutomatonResult(event=None, confidence=0.0)
+
+        raw_location = _raw_location(record)
+        city, city_confidence = _regex_city(record, raw_location)
+        street, street_confidence = _regex_street(record, raw_location)
+        if street is None:
+            return AutomatonResult(event=None, confidence=0.0)
+
+        building, building_confidence = _regex_building(record, raw_location)
+        confidence = min(
+            0.95,
+            max(0.0, street_confidence + city_confidence + building_confidence),
+        )
+        if city is None:
+            confidence *= 0.75
+
+        event = NormalizedEventSchema(
+            event_id=uuid4(),
+            parsed_record_id=record.id,
+            event_type=EventType.POWER_OUTAGE,
+            start_time=record.start_time,
+            end_time=record.end_time,
+            location=LocationSchema(
+                raw=raw_location,
+                normalized=canonical_key(city, street, building),
+                city=city,
+                street=street,
+                building=building,
+            ),
+            reason=record.reason,
+            sources=[record.raw_record_id],
+            confidence=round(confidence, 3),
+        )
+        return AutomatonResult(event=event, confidence=event.confidence)
+
+
 class FallbackNormalizer:
-    """Two-stage normalizer: automaton first, LLM only on low-confidence cases.
+    """Two-stage normalizer: automaton first, regex on low-confidence cases.
 
     The threshold is the confidence below which the automaton's output is
     considered unsafe to trust on its own; callers pass it explicitly so the
@@ -152,7 +261,8 @@ class FallbackNormalizer:
     """
 
     PATH_AUTOMATON = "automaton"
-    PATH_LLM_FALLBACK = "llm_fallback"
+    PATH_REGEX_FALLBACK = "regex_fallback"
+    PATH_LLM_FALLBACK = PATH_REGEX_FALLBACK  # backward-compatible constant alias
     PATH_NONE = "none"
 
     def __init__(
@@ -184,7 +294,10 @@ class FallbackNormalizer:
         )
         fallback_event = await self._fallback.normalize(record)
         if fallback_event is not None:
-            self.last_path = self.PATH_LLM_FALLBACK
+            if result.event is not None and _address_slot_count(fallback_event) < _address_slot_count(result.event):
+                self.last_path = self.PATH_AUTOMATON
+                return result.event
+            self.last_path = self.PATH_REGEX_FALLBACK
             return fallback_event
 
         # Fallback also failed — return the automaton's best effort if any.
@@ -197,6 +310,11 @@ class FallbackNormalizer:
 
 def _tokenize(value: str) -> list[_Token]:
     return [_Token(text=raw, type=_classify(raw)) for raw in normalize_text(value).split()]
+
+
+def _address_slot_count(event: NormalizedEventSchema) -> int:
+    location = event.location
+    return int(bool(location.city)) + int(bool(location.street)) + int(bool(location.building))
 
 
 def _classify(token: str) -> TokenType:
@@ -267,6 +385,10 @@ def _parse_street(value: str | None) -> _FieldParse:
         if tok.type == TokenType.STREET_PREFIX:
             if state == "start":
                 state = "name"
+            elif state == "name" and not parts:
+                # "ул Набережная": the second street-word is the name, not
+                # another prefix.
+                parts.append(tok.text)
             elif state in ("name", "house"):
                 # Embedded second street type — rare, treat as separator hint.
                 state = "name" if state == "house" else state
@@ -339,6 +461,220 @@ def _parse_building(value: str | None) -> _FieldParse:
     return _FieldParse(value=" ".join(parts), extra=None, confidence=confidence)
 
 
+def _regex_city(record: ParsedRecordSchema, raw_location: str) -> tuple[str | None, float]:
+    for candidate in (record.location_city, record.location_district):
+        city = _clean_city_candidate(candidate)
+        if city and _has_alpha_signal(city) and normalize_city(city):
+            return city, 0.08
+
+    for candidate in _candidate_parts_before_street(raw_location):
+        city = _clean_city_candidate(candidate)
+        if city and _has_alpha_signal(city) and normalize_city(city):
+            return city, 0.05
+
+    matches = list(_LOCALITY_RE.finditer(raw_location))
+    for match in reversed(matches):
+        city = _clean_city_candidate(match.group("name"))
+        if city and _has_alpha_signal(city) and normalize_city(city):
+            return city, 0.04
+
+    return None, 0.0
+
+
+def _regex_street(record: ParsedRecordSchema, raw_location: str) -> tuple[str | None, float]:
+    extra_address = _extra_address(record)
+    typed_candidates = [record.location_street, extra_address, raw_location]
+    for candidate in typed_candidates:
+        street = _street_from_typed_regex(candidate)
+        if street and normalize_street(street):
+            return street, 0.78
+
+    # Untyped recovery is deliberately narrower: using the full raw location
+    # here turns city-only rows ("03, заимка Саганур") into fake streets.
+    for candidate in (record.location_street, extra_address):
+        street = _street_from_untyped_text(candidate)
+        if street and normalize_street(street):
+            return street, 0.64
+
+    return None, 0.0
+
+
+def _regex_building(record: ParsedRecordSchema, raw_location: str) -> tuple[str | None, float]:
+    houses_value = record.extra.get("houses") if isinstance(record.extra, dict) else None
+    extra_address = _extra_address(record)
+    for candidate in (houses_value,):
+        building = _building_from_text(str(candidate) if candidate else None)
+        if building:
+            return building, 0.09
+    for candidate in (record.location_street, extra_address, raw_location):
+        building = _building_after_typed_street(candidate)
+        if building:
+            return building, 0.09
+    for candidate in (record.location_street, extra_address):
+        building = _building_from_text(str(candidate) if candidate else None)
+        if building:
+            return building, 0.09
+    return None, 0.0
+
+
+def _clean_city_candidate(value: str | None) -> str | None:
+    if not value:
+        return None
+    if (
+        _CADASTRAL_RE.search(value)
+        or _ROAD_DISTANCE_RE.search(value)
+        or _ROAD_DISTANCE_RE.search(normalize_text(value))
+    ):
+        return None
+
+    parts = [p.strip() for p in re.split(r"[,;]", value) if p.strip()]
+    if not parts:
+        return None
+
+    for part in reversed(parts):
+        normalized = normalize_text(part)
+        if not normalized:
+            continue
+        if any(marker in normalized.split() for marker in _ADMIN_MARKERS):
+            continue
+        match = _LOCALITY_RE.search(part)
+        city = match.group("name") if match else part
+        city = _CITY_PREFIX_RE.sub("", city)
+        city = _strip_street_and_house_tail(city).strip(" .,;:-")
+        if city and _has_alpha_signal(city) and normalize_city(city):
+            return city
+    return None
+
+
+def _candidate_parts_before_street(value: str) -> list[str]:
+    if not value:
+        return []
+    match = _STREET_TYPE_RE.search(value)
+    prefix = value[: match.start()] if match else value
+    return [p.strip() for p in re.split(r"[,;]", prefix) if p.strip()]
+
+
+def _street_from_typed_regex(value: str | None) -> str | None:
+    if not value:
+        return None
+
+    for pattern in (_STREET_TYPE_RE, _STREET_TYPE_TAIL_RE):
+        match = pattern.search(value)
+        if not match:
+            continue
+        name = _strip_street_and_house_tail(match.group("name")).strip(" .,;:-")
+        street_type = match.group("type").strip(" .")
+        street = f"{street_type} {name}" if pattern is _STREET_TYPE_RE else f"{name} {street_type}"
+        if _has_street_name_signal(street):
+            return street
+    return None
+
+
+def _street_from_untyped_text(value: str | None) -> str | None:
+    if not value:
+        return None
+
+    if _ROAD_DISTANCE_RE.search(normalize_text(value)):
+        return None
+
+    street, building = split_address(value)
+    if building and _has_street_name_signal(street):
+        return street.strip(" .,;:-")
+
+    parts = [p.strip() for p in re.split(r"[,;]", value) if p.strip()]
+    for part in reversed(parts):
+        normalized = normalize_text(part)
+        if not normalized:
+            continue
+        if normalize_building(normalized) == normalize_text(normalized):
+            continue
+        if any(marker in normalized.split() for marker in (*LOCALITY_WORDS, *_ADMIN_MARKERS)):
+            continue
+        candidate = _strip_street_and_house_tail(part).strip(" .,;:-")
+        if candidate and _has_street_name_signal(candidate):
+            return candidate
+    return None
+
+
+def _building_from_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    if _CADASTRAL_RE.search(value):
+        return None
+
+    parsed = _parse_building(value)
+    if parsed.value:
+        return parsed.value
+
+    prefix_match = _HOUSE_WITH_PREFIX_RE.search(value)
+    if prefix_match:
+        parsed = _parse_building(prefix_match.group("house"))
+        if parsed.value:
+            return parsed.value
+
+    trailing_match = _TRAILING_HOUSE_RE.search(value)
+    if trailing_match:
+        parsed = _parse_building(trailing_match.group("house"))
+        if parsed.value:
+            return parsed.value
+
+    return None
+
+
+def _building_after_typed_street(value: str | None) -> str | None:
+    if not value:
+        return None
+
+    match = _STREET_TYPE_RE.search(value)
+    if match:
+        parsed = _parse_building(match.group("name"))
+        if parsed.value:
+            return parsed.value
+        trailing_match = _TRAILING_HOUSE_RE.search(match.group("name"))
+        if trailing_match:
+            parsed = _parse_building(trailing_match.group("house"))
+            if parsed.value:
+                return parsed.value
+
+    prefix_match = _HOUSE_WITH_PREFIX_RE.search(value)
+    if prefix_match:
+        parsed = _parse_building(prefix_match.group("house"))
+        if parsed.value:
+            return parsed.value
+    return None
+
+
+def _strip_street_and_house_tail(value: str) -> str:
+    prefix_match = _HOUSE_WITH_PREFIX_RE.search(value)
+    if prefix_match:
+        value = value[: prefix_match.start()]
+    trailing_match = _TRAILING_HOUSE_RE.match(value)
+    if trailing_match:
+        value = trailing_match.group("prefix")
+    return value
+
+
+def _has_alpha_signal(value: str | None, *, min_letters: int = 2) -> bool:
+    if not value:
+        return False
+    return len(_ALPHA_RE.findall(value)) >= min_letters
+
+
+def _has_street_name_signal(value: str | None) -> bool:
+    normalized = normalize_text(value)
+    street = normalize_street(value)
+    if not street or not _has_alpha_signal(street, min_letters=3):
+        return False
+    if normalized in STREET_WORDS:
+        return False
+    if any(marker in normalized.split() for marker in _ADMIN_MARKERS):
+        return False
+    # Kilometre/cadastral/road-distance descriptions are outage locations, but
+    # not office-like street addresses. Let the automaton keep its best effort
+    # instead of replacing it with a fake "км|1" key.
+    return _ROAD_DISTANCE_RE.search(normalized) is None
+
+
 def _raw_location(record: ParsedRecordSchema) -> str:
     parts = [
         record.location_region_code,
@@ -349,4 +685,17 @@ def _raw_location(record: ParsedRecordSchema) -> str:
     houses = record.extra.get("houses") if isinstance(record.extra, dict) else None
     if houses:
         parts.append(str(houses))
+    extra_address = _extra_address(record)
+    if extra_address:
+        parts.append(extra_address)
     return ", ".join(p.strip() for p in parts if p and p.strip())
+
+
+def _extra_address(record: ParsedRecordSchema) -> str | None:
+    if not isinstance(record.extra, dict):
+        return None
+    for key in ("address", "addr", "location", "raw_location"):
+        value = record.extra.get(key)
+        if value:
+            return str(value)
+    return None

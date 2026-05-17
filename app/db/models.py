@@ -244,7 +244,7 @@ class TaskRecord(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # For NORMALIZE_EVENT tasks: which path produced the event. Lets the
-    # Metrics page show automaton-vs-LLM ratio without scanning every call.
+    # Metrics page show automaton-vs-regex ratio without scanning events.
     normalizer_path: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -255,11 +255,8 @@ class TaskRecord(Base):
 class LLMCall(Base):
     """One row per chat-completion request to GigaChat.
 
-    The pipeline writes this from `LLMNormalizer.normalize` after a successful
-    call so the Metrics page can show real token/cost numbers. We keep this in
-    its own table instead of stuffing into TaskRecord because a single task
-    may issue zero or more LLM calls (today it's at most one, but the shape
-    survives future caching/retry semantics).
+    Retained for historical metrics and isolated LLM experiments. The active
+    production normalizer does not write to this table.
     """
 
     __tablename__ = "llm_calls"

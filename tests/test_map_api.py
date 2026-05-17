@@ -57,7 +57,23 @@ def test_map_office_with_active_medium_impact_is_risk():
     mapped = response.offices[0]
     assert mapped.status == "risk"
     assert mapped.active_impacts[0].severity == "medium"
-    assert mapped.active_impacts[0].reason == "Planned feeder maintenance"
+    assert (
+        mapped.active_impacts[0].reason
+        == "Плановое отключение электроэнергии: Planned feeder maintenance"
+    )
+
+
+def test_map_office_grid_unit_reason_is_explained_as_outage():
+    office = FakeOffice()
+    impact = FakeImpact(impact_level="high")
+    event = FakeEvent(event_type="power_outage", reason="Краснотуранский РЭС")
+
+    response = map_router.build_map_offices_response([(office, impact, event)], now=NOW)
+
+    assert (
+        response.offices[0].active_impacts[0].reason
+        == "Плановое отключение электроэнергии. Участок: Краснотуранский РЭС"
+    )
 
 
 def test_map_office_with_active_high_impact_is_critical():
@@ -85,6 +101,21 @@ def test_map_completed_impact_does_not_affect_status():
     assert mapped.active_impacts == []
 
 
+def test_map_future_impact_within_horizon_affects_status():
+    office = FakeOffice()
+    impact = FakeImpact(
+        impact_level="medium",
+        impact_start=NOW + timedelta(days=2),
+        impact_end=NOW + timedelta(days=2, hours=4),
+    )
+
+    response = map_router.build_map_offices_response([(office, impact, FakeEvent())], now=NOW)
+
+    mapped = response.offices[0]
+    assert mapped.status == "risk"
+    assert mapped.active_impacts[0].starts_at == impact.impact_start
+
+
 def test_map_office_without_coordinates_stays_in_response():
     office = FakeOffice(latitude=None, longitude=None)
 
@@ -99,8 +130,9 @@ def test_map_office_without_coordinates_stays_in_response():
 async def test_map_endpoint_returns_offices(monkeypatch):
     office = FakeOffice()
 
-    async def fake_rows(_session, *, now):
+    async def fake_rows(_session, *, now, horizon_until):
         assert now.tzinfo is not None
+        assert horizon_until > now
         return [(office, None, None)]
 
     monkeypatch.setattr(map_router.queries, "list_map_office_rows", fake_rows)

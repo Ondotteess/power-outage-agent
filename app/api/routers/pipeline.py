@@ -15,7 +15,7 @@ _STAGES = [
     ("scheduler", "Scheduler", "fetch_source", None),
     ("collector", "Collector", "fetch_source", None),
     ("parser", "Parser", "parse_content", None),
-    ("normalizer", "LLM Normalizer", "normalize_event", None),
+    ("normalizer", "Regex Normalizer", "normalize_event", None),
     ("dedup", "Dedup Engine", "deduplicate_event", None),
     ("matcher", "Office Matcher", "match_offices", None),
     ("notifier", "Notifier", "emit_event", None),

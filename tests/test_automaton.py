@@ -13,6 +13,7 @@ from app.models.schemas import (
 from app.normalization.automaton import (
     AutomatonNormalizer,
     FallbackNormalizer,
+    RegexNormalizer,
     _parse_building,
     _parse_city,
     _parse_street,
@@ -172,12 +173,12 @@ async def test_automaton_low_confidence_when_city_glued_with_region():
 
 
 # ---------------------------------------------------------------------------
-# FallbackNormalizer wiring
+# RegexNormalizer fallback + FallbackNormalizer wiring
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class FakeLLMNormalizer:
+class FakeRegexNormalizer:
     return_value: NormalizedEventSchema | None
     calls: list[ParsedRecordSchema] = field(default_factory=list)
 
@@ -186,7 +187,7 @@ class FakeLLMNormalizer:
         return self.return_value
 
 
-def _llm_event(parsed_id: UUID, raw_id: UUID) -> NormalizedEventSchema:
+def _fallback_event(parsed_id: UUID, raw_id: UUID) -> NormalizedEventSchema:
     return NormalizedEventSchema(
         event_id=uuid4(),
         parsed_record_id=parsed_id,
@@ -194,10 +195,10 @@ def _llm_event(parsed_id: UUID, raw_id: UUID) -> NormalizedEventSchema:
         start_time=datetime(2026, 5, 12, 3, 0, tzinfo=UTC),
         end_time=None,
         location=LocationSchema(
-            raw="LLM raw",
-            normalized="llm|key|0",
-            city="LLM City",
-            street="LLM Street",
+            raw="regex raw",
+            normalized="regex|key|0",
+            city="Regex City",
+            street="Regex Street",
             building="0",
         ),
         reason=None,
@@ -206,58 +207,85 @@ def _llm_event(parsed_id: UUID, raw_id: UUID) -> NormalizedEventSchema:
     )
 
 
+async def test_regex_normalizer_recovers_glued_locality_address():
+    record = _parsed(
+        location_city="Красноярский край, Краснотуранский р-н, с Лебяжье",
+        location_street="ул Ленина, д 13",
+        extra={},
+    )
+    event = await RegexNormalizer().normalize(record)
+
+    assert event is not None
+    assert event.location.city == "Лебяжье"
+    assert event.location.street == "ул Ленина"
+    assert event.location.building == "13"
+    assert event.location.normalized == "лебяжье|ленина|13"
+
+
+async def test_regex_normalizer_recovers_street_from_raw_location_when_field_missing():
+    record = _parsed(
+        location_city="Томск",
+        location_street=None,
+        extra={"address": "Томск, ул Учебная, д 3"},
+    )
+    event = await RegexNormalizer().normalize(record)
+
+    assert event is not None
+    assert event.location.normalized == "томск|учебная|3"
+
+
 async def test_fallback_uses_automaton_when_confidence_above_threshold():
     record = _parsed()
-    llm = FakeLLMNormalizer(return_value=None)
-    normalizer = FallbackNormalizer(AutomatonNormalizer(), llm, threshold=0.6)
+    regex = FakeRegexNormalizer(return_value=None)
+    normalizer = FallbackNormalizer(AutomatonNormalizer(), regex, threshold=0.6)
 
     event = await normalizer.normalize(record)
 
     assert event is not None
     assert event.location.normalized == "томск|кирова|12"
-    assert llm.calls == []  # LLM never called
+    assert regex.calls == []
 
 
-async def test_fallback_calls_llm_when_confidence_below_threshold():
+async def test_fallback_calls_regex_when_confidence_below_threshold():
     # Force low confidence by setting threshold = 1.0 (only perfect parses pass).
     record = _parsed(location_city="Томская область Томский район Томск")
-    llm_event = _llm_event(record.id, record.raw_record_id)
-    llm = FakeLLMNormalizer(return_value=llm_event)
-    normalizer = FallbackNormalizer(AutomatonNormalizer(), llm, threshold=1.0)
+    regex_event = _fallback_event(record.id, record.raw_record_id)
+    regex = FakeRegexNormalizer(return_value=regex_event)
+    normalizer = FallbackNormalizer(AutomatonNormalizer(), regex, threshold=1.0)
 
     event = await normalizer.normalize(record)
 
-    assert event is llm_event
-    assert llm.calls == [record]
+    assert event is regex_event
+    assert regex.calls == [record]
 
 
-async def test_fallback_calls_llm_when_automaton_produced_nothing():
+async def test_fallback_calls_regex_when_automaton_produced_nothing():
     record = _parsed(location_street=None)
-    llm_event = _llm_event(record.id, record.raw_record_id)
-    llm = FakeLLMNormalizer(return_value=llm_event)
-    normalizer = FallbackNormalizer(AutomatonNormalizer(), llm, threshold=0.6)
+    regex_event = _fallback_event(record.id, record.raw_record_id)
+    regex = FakeRegexNormalizer(return_value=regex_event)
+    normalizer = FallbackNormalizer(AutomatonNormalizer(), regex, threshold=0.6)
 
     event = await normalizer.normalize(record)
 
-    assert event is llm_event
-    assert llm.calls == [record]
+    assert event is regex_event
+    assert regex.calls == [record]
 
 
-async def test_fallback_returns_automaton_when_llm_also_fails():
+async def test_fallback_returns_automaton_when_regex_also_fails():
     record = _parsed(location_city="Томская область Томский район Томск")
-    llm = FakeLLMNormalizer(return_value=None)
-    normalizer = FallbackNormalizer(AutomatonNormalizer(), llm, threshold=1.0)
+    regex = FakeRegexNormalizer(return_value=None)
+    normalizer = FallbackNormalizer(AutomatonNormalizer(), regex, threshold=1.0)
 
     event = await normalizer.normalize(record)
 
     assert event is not None  # automaton's best effort
-    assert llm.calls == [record]
+    assert regex.calls == [record]
 
 
 async def test_fallback_returns_none_when_both_paths_fail():
     record = _parsed(location_street=None)
-    llm = FakeLLMNormalizer(return_value=None)
-    normalizer = FallbackNormalizer(AutomatonNormalizer(), llm, threshold=0.6)
+    regex = FakeRegexNormalizer(return_value=None)
+    normalizer = FallbackNormalizer(AutomatonNormalizer(), regex, threshold=0.6)
 
     event = await normalizer.normalize(record)
 

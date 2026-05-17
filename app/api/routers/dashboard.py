@@ -48,7 +48,12 @@ async def summary(session: SessionDep) -> DashboardSummary:
 
     task_counts = await queries.count_tasks_by_status(session)
     failed = task_counts.get("failed", 0)
-    offices_at_risk = await queries.count_active_office_impacts(session, datetime.now(UTC))
+    now = datetime.now(UTC)
+    offices_at_risk = await queries.count_active_office_impacts(
+        session,
+        now,
+        horizon_until=now + timedelta(days=7),
+    )
     duplicates_skipped = await queries.count_dedup_events_since(session, now_24h)
 
     pct_raw, label_raw, status_raw = _delta(raw_today, raw_prev)

@@ -7,27 +7,27 @@ export default {
     extend: {
       colors: {
         bg: {
-          base: "#0F172A",
-          surface: "#111827",
-          elevated: "#1A2233",
-          subtle: "#0B1220",
+          base: "#F7F7F7",
+          surface: "#FFFFFF",
+          elevated: "#F1F1F1",
+          subtle: "#E7E7E7",
         },
         line: {
-          DEFAULT: "#1F2937",
-          muted: "#1A2233",
+          DEFAULT: "#D4D4D4",
+          muted: "#E5E5E5",
         },
         ink: {
-          DEFAULT: "#E5E7EB",
-          muted: "#9CA3AF",
-          dim: "#6B7280",
+          DEFAULT: "#111111",
+          muted: "#525252",
+          dim: "#8A8A8A",
         },
         accent: {
-          teal: "#22D3EE",
-          green: "#10B981",
-          amber: "#F59E0B",
-          red: "#EF4444",
-          gray: "#6B7280",
-          blue: "#3B82F6",
+          teal: "#111111",
+          green: "#16A34A",
+          amber: "#737373",
+          red: "#DC2626",
+          gray: "#737373",
+          blue: "#111111",
         },
       },
       fontFamily: {
@@ -56,11 +56,11 @@ export default {
         "2xs": ["0.6875rem", { lineHeight: "1rem" }],
       },
       boxShadow: {
-        card: "0 1px 0 0 rgba(255,255,255,0.02) inset, 0 1px 2px rgba(0,0,0,0.35)",
+        card: "0 1px 0 0 rgba(0,0,0,0.04), 0 12px 40px rgba(0,0,0,0.04)",
       },
       borderRadius: {
-        xl: "0.75rem",
-        "2xl": "1rem",
+        xl: "0.5rem",
+        "2xl": "0.5rem",
       },
     },
   },

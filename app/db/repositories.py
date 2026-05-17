@@ -156,9 +156,9 @@ class TaskStore:
         return max(0.0, (next_run_at - now).total_seconds())
 
     async def set_normalizer_path(self, task_id: UUID, path: str) -> None:
-        """Record which normalizer (`automaton` or `llm_fallback`) produced the
+        """Record which normalizer (`automaton` or `regex_fallback`) produced the
         event for a NORMALIZE_EVENT task. Used by the Metrics page to show the
-        FSA-vs-LLM hit ratio without scanning every LLMCall row."""
+        FSA-vs-regex hit ratio without scanning every normalized event."""
         async with self._sf() as session:
             await session.execute(
                 update(TaskRecord)
@@ -598,6 +598,41 @@ class OfficeStore:
 class OfficeImpactStore:
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._sf = session_factory
+
+    async def replace_for_event(
+        self,
+        event_id: UUID,
+        impacts: list[OfficeImpactSchema],
+        trace_id: UUID,
+    ) -> int:
+        async with self._sf() as session:
+            await session.execute(delete(OfficeImpact).where(OfficeImpact.event_id == event_id))
+            saved = 0
+            for impact in impacts:
+                session.add(
+                    OfficeImpact(
+                        id=impact.id,
+                        office_id=impact.office_id,
+                        event_id=impact.event_id,
+                        impact_start=impact.impact_start,
+                        impact_end=impact.impact_end,
+                        impact_level=str(impact.impact_level),
+                        match_strategy=impact.match_strategy,
+                        match_score=impact.match_score,
+                        match_explanation=impact.match_explanation,
+                        trace_id=trace_id,
+                        detected_at=impact.detected_at,
+                    )
+                )
+                saved += 1
+            await session.commit()
+
+        logger.info(
+            "OfficeImpactStore  replaced impacts  event_id=%s  saved=%d",
+            event_id,
+            saved,
+        )
+        return saved
 
     async def save_many(self, impacts: list[OfficeImpactSchema], trace_id: UUID) -> int:
         if not impacts:

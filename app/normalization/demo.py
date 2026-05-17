@@ -18,7 +18,7 @@ _HOUSE_RE = re.compile(r"(?<!\d)(\d{1,4})(?:/\d{1,4})?[a-zа-я]?", re.IGNORECAS
 class DemoNormalizer:
     """Deterministic normalizer for local end-to-end demo runs.
 
-    It keeps the same NormalizerProtocol as LLMNormalizer but avoids external
+    It keeps the same NormalizerProtocol as the production fallback but avoids external
     credentials and network calls, so `--demo-e2e` is repeatable.
     """
 

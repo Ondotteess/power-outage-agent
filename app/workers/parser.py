@@ -45,7 +45,11 @@ class ParseHandler:
         source_store,
         parsed_store,
         *,
-        llm_normalization_enabled: bool = True,
+        normalization_enabled: bool = True,
+        fallback_normalization_enabled: bool | None = None,
+        fallback_normalization_max_per_raw: int | None = None,
+        fallback_normalization_max_per_source: int | None = None,
+        llm_normalization_enabled: bool | None = None,
         llm_normalization_max_per_raw: int | None = None,
         parser_profile_override: dict | None = None,
         llm_normalization_max_per_source: int | None = None,
@@ -54,11 +58,20 @@ class ParseHandler:
         self._raw_store = raw_store
         self._source_store = source_store
         self._parsed_store = parsed_store
-        self._llm_normalization_enabled = llm_normalization_enabled
-        self._llm_normalization_max_per_raw = llm_normalization_max_per_raw
+        self._normalization_enabled = normalization_enabled
+        if fallback_normalization_enabled is None:
+            fallback_normalization_enabled = (
+                True if llm_normalization_enabled is None else llm_normalization_enabled
+            )
+        if fallback_normalization_max_per_raw is None:
+            fallback_normalization_max_per_raw = llm_normalization_max_per_raw
+        if fallback_normalization_max_per_source is None:
+            fallback_normalization_max_per_source = llm_normalization_max_per_source
+        self._fallback_normalization_enabled = fallback_normalization_enabled
+        self._fallback_normalization_max_per_raw = fallback_normalization_max_per_raw
         self._parser_profile_override = parser_profile_override or {}
-        self._llm_normalization_max_per_source = llm_normalization_max_per_source
-        self._normalized_per_source: dict[UUID | None, int] = {}
+        self._fallback_normalization_max_per_source = fallback_normalization_max_per_source
+        self._fallback_per_source: dict[UUID | None, int] = {}
 
     async def handle(self, task: Task) -> None:
         raw_id = UUID(task.payload["raw_record_id"])
@@ -116,16 +129,16 @@ class ParseHandler:
             if persisted_records is not None:
                 records = persisted_records
 
-        if not self._llm_normalization_enabled:
+        if not self._normalization_enabled:
             logger.info(
-                "ParseHandler  LLM normalization globally disabled  raw_id=%s  parsed_count=%d  trace=%s",
+                "ParseHandler  normalization globally disabled  raw_id=%s  parsed_count=%d  trace=%s",
                 raw_id,
                 len(records),
                 task.trace_id,
             )
             return
 
-        if not parser_profile.get("normalize_enabled", True):
+        if parser_profile.get("normalization_enabled") is False:
             logger.info(
                 "ParseHandler  normalization disabled  raw_id=%s  parsed_count=%d  trace=%s",
                 raw_id,
@@ -134,35 +147,40 @@ class ParseHandler:
             )
             return
 
-        normalize_limit = _effective_normalize_limit(
-            parser_profile.get("normalize_limit"),
-            self._llm_normalization_max_per_raw,
+        fallback_enabled = self._fallback_enabled(parser_profile)
+        fallback_limit = _effective_normalize_limit(
+            parser_profile.get("fallback_limit"),
+            self._fallback_normalization_max_per_raw,
         )
-        records_to_normalize = records
-        if normalize_limit is not None:
-            records_to_normalize = records[:normalize_limit]
+        fallback_records = records if fallback_enabled else []
+        if fallback_limit is not None and fallback_enabled:
+            fallback_records = fallback_records[:fallback_limit]
             logger.info(
-                "ParseHandler  normalization limited  raw_id=%s  limit=%d/%d  trace=%s",
+                "ParseHandler  regex fallback limited  raw_id=%s  limit=%d/%d  trace=%s",
                 raw_id,
-                len(records_to_normalize),
+                len(fallback_records),
                 len(records),
                 task.trace_id,
             )
 
-        records_to_normalize = self._apply_source_budget(raw.source_id, records_to_normalize)
-        if not records_to_normalize:
+        fallback_records = self._apply_source_budget(raw.source_id, fallback_records)
+        fallback_ids = {record.id for record in fallback_records}
+        if not fallback_ids and fallback_enabled:
             logger.info(
-                "ParseHandler  source normalization budget exhausted  raw_id=%s  source_id=%s  trace=%s",
+                "ParseHandler  source regex fallback budget exhausted  raw_id=%s  source_id=%s  trace=%s",
                 raw_id,
                 raw.source_id,
                 task.trace_id,
             )
-            return
 
-        for record in records_to_normalize:
+        for record in records:
             normalize_task = Task(
                 task_type=TaskType.NORMALIZE_EVENT,
-                payload={"parsed_record_id": str(record.id)},
+                payload={
+                    "parsed_record_id": str(record.id),
+                    "allow_fallback": record.id in fallback_ids,
+                    "allow_llm_fallback": record.id in fallback_ids,
+                },
                 trace_id=task.trace_id,
             )
             logger.debug(
@@ -173,18 +191,30 @@ class ParseHandler:
             )
             await self._submit(normalize_task)
 
+    def _fallback_enabled(self, parser_profile: dict) -> bool:
+        if not self._fallback_normalization_enabled:
+            return False
+        if "fallback_enabled" in parser_profile:
+            return bool(parser_profile["fallback_enabled"])
+        if "regex_fallback_enabled" in parser_profile:
+            return bool(parser_profile["regex_fallback_enabled"])
+        # Legacy `llm_fallback_enabled=false` / `normalize_enabled=false` were
+        # paid-call guardrails. Regex fallback is local and cheap, so old source
+        # profiles no longer suppress it.
+        return True
+
     def _apply_source_budget(
         self,
         source_id: UUID | None,
         records: list[ParsedRecordSchema],
     ) -> list[ParsedRecordSchema]:
-        if self._llm_normalization_max_per_source is None:
+        if self._fallback_normalization_max_per_source is None:
             return records
-        limit = max(0, self._llm_normalization_max_per_source)
-        used = self._normalized_per_source.get(source_id, 0)
+        limit = max(0, self._fallback_normalization_max_per_source)
+        used = self._fallback_per_source.get(source_id, 0)
         remaining = max(0, limit - used)
         selected = records[:remaining]
-        self._normalized_per_source[source_id] = used + len(selected)
+        self._fallback_per_source[source_id] = used + len(selected)
         return selected
 
 

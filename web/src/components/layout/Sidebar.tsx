@@ -11,7 +11,6 @@ import {
   Gauge,
   GitBranch,
   Inbox,
-  LayoutDashboard,
   ListChecks,
   MapPinned,
   Radar,
@@ -24,11 +23,11 @@ import {
 interface Item {
   to: string;
   label: string;
-  icon: typeof LayoutDashboard;
+  icon: typeof MapPinned;
 }
 
 const NAV: Item[] = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/", label: "Map", icon: MapPinned },
   { to: "/sources", label: "Sources", icon: Database },
   { to: "/scheduler", label: "Scheduler", icon: Activity },
   { to: "/queue", label: "Queue", icon: Inbox },
@@ -38,7 +37,7 @@ const NAV: Item[] = [
   { to: "/normalization", label: "Normalization", icon: Sparkles },
   { to: "/dedup", label: "Dedup Engine", icon: Radar },
   { to: "/offices", label: "Office Matcher", icon: Building2 },
-  { to: "/map", label: "Threat Map", icon: MapPinned },
+  { to: "/map", label: "Map Debug", icon: MapPinned },
   { to: "/notifications", label: "Notifications", icon: Bell },
   { to: "/dlq", label: "Tasks / DLQ", icon: AlertTriangle },
   { to: "/metrics", label: "Metrics", icon: Gauge },
@@ -60,13 +59,13 @@ export function Sidebar({
       }`}
     >
       <div className={`flex h-14 items-center gap-2 border-b border-line px-3 ${collapsed ? "justify-center" : ""}`}>
-        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-accent-teal/40 bg-accent-teal/10 text-accent-teal">
+        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-ink bg-ink text-bg-surface">
           <Zap size={16} />
         </div>
         {!collapsed && (
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-ink">Outage Agent</div>
-            <div className="truncate text-2xs text-ink-muted">Admin console</div>
+            <div className="truncate text-2xs text-ink-muted">Operations</div>
           </div>
         )}
       </div>
@@ -81,7 +80,7 @@ export function Sidebar({
                 className={({ isActive }) =>
                   `group flex items-center gap-3 rounded-md px-2.5 py-2 text-sm transition-colors ${
                     isActive
-                      ? "bg-accent-teal/10 text-accent-teal"
+                      ? "bg-ink text-bg-surface"
                       : "text-ink-muted hover:bg-bg-elevated hover:text-ink"
                   }`
                 }
@@ -98,7 +97,7 @@ export function Sidebar({
       <div className={`border-t border-line p-3 ${collapsed ? "flex justify-center" : ""}`}>
         {!collapsed ? (
           <div className="flex items-center gap-2">
-            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-blue/15 text-xs font-semibold text-accent-blue">
+            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-line bg-bg-surface text-xs font-semibold text-ink">
               A
             </div>
             <div className="min-w-0 flex-1">

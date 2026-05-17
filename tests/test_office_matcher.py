@@ -95,6 +95,39 @@ def test_street_area_match_when_source_lists_whole_street_without_houses():
     assert matches[0].match_strategy == "street_area"
 
 
+def test_bank_style_full_office_address_uses_street_segment():
+    office = _office(
+        city="с Молчаново",
+        address="Томская обл, с Молчаново, ул Димитрова, д 70А",
+    )
+    event = _event(
+        city="село Молчаново",
+        street="ул Димитрова",
+        building="70А",
+        normalized="село Молчаново, ул Димитрова, дом 70А",
+    )
+
+    matches = OfficeMatcher([office]).match(event, now=NOW)
+
+    assert len(matches) == 1
+    assert matches[0].match_strategy == "exact_address"
+
+
+def test_region_prefix_does_not_create_street_area_false_positive():
+    office = _office(
+        city="с Молчаново",
+        address="Томская обл, с Молчаново, ул Димитрова, д 70А",
+    )
+    event = _event(
+        city="село Лучаново",
+        street="Томская область, Томский район, село Лучаново, улица Заводская",
+        building=None,
+        normalized="Томская область, Томский район, село Лучаново, улица Заводская",
+    )
+
+    assert OfficeMatcher([office]).match(event, now=NOW) == []
+
+
 def test_expired_event_is_ignored():
     office = _office()
     event = _event(end_time=NOW - timedelta(minutes=1))

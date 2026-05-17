@@ -54,9 +54,19 @@ class FakeOfficeStore:
 @dataclass
 class FakeImpactStore:
     saved: list[tuple[list[OfficeImpactSchema], UUID]] = field(default_factory=list)
+    replaced: list[tuple[UUID, list[OfficeImpactSchema], UUID]] = field(default_factory=list)
 
     async def save_many(self, impacts: list[OfficeImpactSchema], trace_id: UUID) -> int:
         self.saved.append((impacts, trace_id))
+        return len(impacts)
+
+    async def replace_for_event(
+        self,
+        event_id: UUID,
+        impacts: list[OfficeImpactSchema],
+        trace_id: UUID,
+    ) -> int:
+        self.replaced.append((event_id, impacts, trace_id))
         return len(impacts)
 
 
@@ -81,8 +91,9 @@ async def test_office_match_handler_saves_impacts():
 
     await handler.handle(task)
 
-    assert len(impact_store.saved) == 1
-    impacts, trace_id = impact_store.saved[0]
+    assert len(impact_store.replaced) == 1
+    replaced_event_id, impacts, trace_id = impact_store.replaced[0]
+    assert replaced_event_id == event.event_id
     assert trace_id == task.trace_id
     assert len(impacts) == 1
     assert impacts[0].office_id == office.id

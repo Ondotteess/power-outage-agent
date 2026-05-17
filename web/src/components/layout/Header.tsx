@@ -1,13 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Check, Loader2, RefreshCw, X } from "lucide-react";
+import { Check, Loader2, RefreshCw, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmtRelative } from "@/lib/format";
 import { StatusDot } from "@/components/ui/Badge";
-
-const REGIONS = ["All regions", "RU-KEM", "RU-TOM"];
-const SOURCE_TYPES = ["All types", "json", "html", "telegram"];
-const WINDOWS = ["24h", "7d", "30d"];
 
 export function Header() {
   const queryClient = useQueryClient();
@@ -21,9 +17,6 @@ export function Header() {
     queryFn: () => api.listSources(),
   });
 
-  const [region, setRegion] = useState(REGIONS[0]);
-  const [type, setType] = useState(SOURCE_TYPES[0]);
-  const [win, setWin] = useState(WINDOWS[0]);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
 
   const pollAll = useMutation({
@@ -46,7 +39,7 @@ export function Header() {
   const overallTone = overall === "healthy" ? "green" : overall === "degraded" ? "amber" : "red";
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-line bg-bg-base/85 px-4 backdrop-blur">
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-line bg-bg-surface/90 px-4 backdrop-blur">
       <div className="flex min-w-0 items-center gap-3">
         <span className="truncate text-sm font-medium text-ink">Power Outage Agent</span>
         <span className="hidden h-5 w-px bg-line md:block" />
@@ -60,23 +53,7 @@ export function Header() {
         </div>
       </div>
 
-      <div className="ml-auto flex flex-wrap items-center gap-2">
-        <select className="input !h-8 !text-xs" value={region} onChange={(e) => setRegion(e.target.value)}>
-          {REGIONS.map((r) => (
-            <option key={r}>{r}</option>
-          ))}
-        </select>
-        <select className="input !h-8 !text-xs" value={type} onChange={(e) => setType(e.target.value)}>
-          {SOURCE_TYPES.map((t) => (
-            <option key={t}>{t}</option>
-          ))}
-        </select>
-        <select className="input !h-8 !text-xs" value={win} onChange={(e) => setWin(e.target.value)}>
-          {WINDOWS.map((w) => (
-            <option key={w}>{w}</option>
-          ))}
-        </select>
-
+      <div className="ml-auto flex items-center gap-2">
         <button
           className="btn btn-primary !py-1 !text-xs"
           onClick={() => pollAll.mutate()}
@@ -84,10 +61,6 @@ export function Header() {
         >
           {pollAll.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
           Run poll now
-        </button>
-
-        <button className="btn-ghost btn !p-1.5" aria-label="Notifications">
-          <Bell size={16} />
         </button>
       </div>
 

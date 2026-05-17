@@ -231,6 +231,8 @@ class TestParseHandler:
         assert len(parsed_store.saved[0]) == 2
         assert len(submitted) == 2
         assert all(t.task_type == TaskType.NORMALIZE_EVENT for t in submitted)
+        assert [t.payload["allow_fallback"] for t in submitted] == [True, True]
+        assert [t.payload["allow_llm_fallback"] for t in submitted] == [True, True]
 
     async def test_raises_when_raw_record_missing(self):
         handler, _, _ = self._make_handler(raw_record=None)
@@ -256,7 +258,7 @@ class TestParseHandler:
         assert parsed_store.saved == []
 
     async def test_normalization_can_be_disabled_by_profile(self):
-        source = FakeSource(parser_profile={"parser": "rosseti_sib", "normalize_enabled": False})
+        source = FakeSource(parser_profile={"parser": "rosseti_sib", "normalization_enabled": False})
         raw = FakeRawRecord(source_id=source.id, raw_content=json.dumps([_make_item()]))
         handler, submitted, parsed_store = self._make_handler(raw, source)
 
@@ -265,8 +267,20 @@ class TestParseHandler:
         assert len(parsed_store.saved) == 1
         assert submitted == []
 
-    async def test_normalization_limit_caps_enqueued_tasks(self):
-        source = FakeSource(parser_profile={"parser": "rosseti_sib", "normalize_limit": 1})
+    async def test_legacy_normalize_enabled_false_no_longer_disables_regex_fallback(self):
+        source = FakeSource(parser_profile={"parser": "rosseti_sib", "normalize_enabled": False})
+        raw = FakeRawRecord(source_id=source.id, raw_content=json.dumps([_make_item()]))
+        handler, submitted, parsed_store = self._make_handler(raw, source)
+
+        await handler.handle(self._make_task(raw.id))
+
+        assert len(parsed_store.saved) == 1
+        assert len(submitted) == 1
+        assert submitted[0].payload["allow_fallback"] is True
+        assert submitted[0].payload["allow_llm_fallback"] is True
+
+    async def test_fallback_limit_caps_regex_fallback_not_enqueue(self):
+        source = FakeSource(parser_profile={"parser": "rosseti_sib", "fallback_limit": 1})
         raw = FakeRawRecord(
             source_id=source.id,
             raw_content=json.dumps(
@@ -281,23 +295,27 @@ class TestParseHandler:
         await handler.handle(self._make_task(raw.id))
 
         assert len(parsed_store.saved[0]) == 2
-        assert len(submitted) == 1
+        assert len(submitted) == 2
+        assert [t.payload["allow_fallback"] for t in submitted] == [True, False]
+        assert [t.payload["allow_llm_fallback"] for t in submitted] == [True, False]
 
-    async def test_global_llm_normalization_flag_disables_enqueue(self):
+    async def test_global_fallback_normalization_flag_disables_fallback_only(self):
         source = FakeSource(parser_profile={"parser": "rosseti_sib"})
         raw = FakeRawRecord(source_id=source.id, raw_content=json.dumps([_make_item()]))
         handler, submitted, parsed_store = self._make_handler(
             raw,
             source,
-            llm_normalization_enabled=False,
+            fallback_normalization_enabled=False,
         )
 
         await handler.handle(self._make_task(raw.id))
 
         assert len(parsed_store.saved) == 1
-        assert submitted == []
+        assert len(submitted) == 1
+        assert submitted[0].payload["allow_fallback"] is False
+        assert submitted[0].payload["allow_llm_fallback"] is False
 
-    async def test_global_llm_normalization_cap_limits_enqueue(self):
+    async def test_global_fallback_normalization_cap_limits_fallback_only(self):
         source = FakeSource(parser_profile={"parser": "rosseti_sib"})
         raw = FakeRawRecord(
             source_id=source.id,
@@ -312,13 +330,15 @@ class TestParseHandler:
         handler, submitted, parsed_store = self._make_handler(
             raw,
             source,
-            llm_normalization_max_per_raw=2,
+            fallback_normalization_max_per_raw=2,
         )
 
         await handler.handle(self._make_task(raw.id))
 
         assert len(parsed_store.saved[0]) == 3
-        assert len(submitted) == 2
+        assert len(submitted) == 3
+        assert [t.payload["allow_fallback"] for t in submitted] == [True, True, False]
+        assert [t.payload["allow_llm_fallback"] for t in submitted] == [True, True, False]
 
     async def test_parser_profile_override_enables_limited_normalization(self):
         source = FakeSource(parser_profile={"parser": "rosseti_sib", "normalize_enabled": False})
@@ -335,13 +355,15 @@ class TestParseHandler:
         handler, submitted, parsed_store = self._make_handler(
             raw,
             source,
-            parser_profile_override={"normalize_enabled": True, "normalize_limit": 2},
+            parser_profile_override={"normalize_enabled": True, "fallback_limit": 2},
         )
 
         await handler.handle(self._make_task(raw.id))
 
         assert len(parsed_store.saved[0]) == 3
-        assert len(submitted) == 2
+        assert len(submitted) == 3
+        assert [t.payload["allow_fallback"] for t in submitted] == [True, True, False]
+        assert [t.payload["allow_llm_fallback"] for t in submitted] == [True, True, False]
 
     async def test_per_source_normalization_budget_spans_multiple_raw_records(self):
         source = FakeSource(parser_profile={"parser": "rosseti_sib"})
@@ -357,7 +379,7 @@ class TestParseHandler:
         handler, submitted, _parsed_store = self._make_handler(
             raw1,
             source,
-            llm_normalization_max_per_source=3,
+            fallback_normalization_max_per_source=3,
         )
 
         await handler.handle(self._make_task(raw1.id))
@@ -374,4 +396,16 @@ class TestParseHandler:
         handler._raw_store.record = raw2
         await handler.handle(self._make_task(raw2.id))
 
-        assert len(submitted) == 3
+        assert len(submitted) == 4
+        assert [t.payload["allow_fallback"] for t in submitted] == [
+            True,
+            True,
+            True,
+            False,
+        ]
+        assert [t.payload["allow_llm_fallback"] for t in submitted] == [
+            True,
+            True,
+            True,
+            False,
+        ]

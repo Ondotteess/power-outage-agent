@@ -220,6 +220,7 @@ async def list_map_office_rows(
     session: AsyncSession,
     *,
     now: datetime,
+    horizon_until: datetime,
 ) -> list[tuple[Office, OfficeImpact | None, NormalizedEvent | None]]:
     result = await session.execute(
         select(Office, OfficeImpact, NormalizedEvent)
@@ -227,7 +228,7 @@ async def list_map_office_rows(
             OfficeImpact,
             and_(
                 OfficeImpact.office_id == Office.id,
-                OfficeImpact.impact_start <= now,
+                OfficeImpact.impact_start <= horizon_until,
                 or_(OfficeImpact.impact_end.is_(None), OfficeImpact.impact_end >= now),
             ),
         )
@@ -253,10 +254,16 @@ async def list_notifications(
     return [(notification, office) for notification, office in result.all()]
 
 
-async def count_active_office_impacts(session: AsyncSession, now: datetime) -> int:
+async def count_active_office_impacts(
+    session: AsyncSession,
+    now: datetime,
+    *,
+    horizon_until: datetime | None = None,
+) -> int:
+    until = horizon_until or now
     result = await session.execute(
         select(func.count(distinct(OfficeImpact.office_id))).where(
-            OfficeImpact.impact_start <= now,
+            OfficeImpact.impact_start <= until,
             or_(OfficeImpact.impact_end.is_(None), OfficeImpact.impact_end >= now),
         )
     )

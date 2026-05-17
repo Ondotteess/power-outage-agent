@@ -22,6 +22,7 @@ dev = [
 ]
 web = [
     "fastapi>=0.115",
+    "python-multipart>=0.0.20",
     "uvicorn[standard]>=0.32",
     "psutil>=5.9",  # admin API memory snapshot on /api/metrics/pipeline
 ]

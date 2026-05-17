@@ -3,7 +3,7 @@
 Covers:
 - GigaChatClient.extract_usage (parsing of OpenAI-style usage field).
 - LLMNormalizer.call_store wiring (token rows persisted on both ok and error).
-- FallbackNormalizer.last_path (automaton / llm_fallback / none).
+- FallbackNormalizer.last_path (automaton / regex_fallback / none).
 - NormalizationHandler -> task_path_store.set_normalizer_path flow.
 - queries._percentile pure helper.
 """
@@ -218,7 +218,7 @@ def _llm_event(parsed_id: UUID, raw_id: UUID) -> NormalizedEventSchema:
         event_type=EventType.POWER_OUTAGE,
         start_time=datetime(2026, 5, 12, 3, 0, tzinfo=UTC),
         end_time=None,
-        location=LocationSchema(raw="x", normalized="x|x|x"),
+        location=LocationSchema(raw="x", normalized="x|x|x", city="x", street="x", building="x"),
         reason=None,
         sources=[raw_id],
         confidence=0.9,
@@ -233,7 +233,7 @@ async def test_fallback_last_path_automaton_when_confidence_high():
     assert normalizer.last_path == FallbackNormalizer.PATH_AUTOMATON
 
 
-async def test_fallback_last_path_llm_when_confidence_below_threshold():
+async def test_fallback_last_path_regex_when_confidence_below_threshold():
     record = _parsed_for_llm()
     fallback_event = _llm_event(record.id, record.raw_record_id)
     normalizer = FallbackNormalizer(
@@ -246,7 +246,7 @@ async def test_fallback_last_path_llm_when_confidence_below_threshold():
     )
 
     await normalizer.normalize(bad_record)
-    assert normalizer.last_path == FallbackNormalizer.PATH_LLM_FALLBACK
+    assert normalizer.last_path == FallbackNormalizer.PATH_REGEX_FALLBACK
 
 
 async def test_fallback_last_path_none_when_both_fail():

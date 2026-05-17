@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -25,6 +25,8 @@ _OUTAGE_TERMS = (
     "отключ",
     "закрыт",
 )
+_GRID_UNIT_TERMS = ("рэс", "уэс", "сет", "участ")
+_RISK_HORIZON = timedelta(days=7)
 
 
 @dataclass
@@ -36,7 +38,7 @@ class _OfficeBucket:
 @router.get("/offices", response_model=MapOfficesResponse)
 async def list_map_offices(session: SessionDep) -> MapOfficesResponse:
     now = datetime.now(UTC)
-    rows = await queries.list_map_office_rows(session, now=now)
+    rows = await queries.list_map_office_rows(session, now=now, horizon_until=now + _RISK_HORIZON)
     return build_map_offices_response(rows, now=now)
 
 
@@ -49,7 +51,7 @@ def build_map_offices_response(
     buckets: dict[UUID, _OfficeBucket] = {}
     for office, impact, event in rows:
         bucket = buckets.setdefault(office.id, _OfficeBucket(office=office))
-        if impact is None or not _is_active_impact(impact, active_at):
+        if impact is None or not _is_relevant_impact(impact, active_at):
             continue
 
         severity = _severity(impact.impact_level)
@@ -130,15 +132,58 @@ def _event_means_outage(event: NormalizedEvent | None) -> bool:
 
 
 def _reason(impact: OfficeImpact, event: NormalizedEvent | None) -> str:
-    if event is not None and event.reason:
-        return event.reason
-    return f"Matched by {impact.match_strategy}"
+    label = _event_label(event)
+    detail = (event.reason or "").strip() if event is not None and event.reason else ""
+    if not detail:
+        return label
+    if _looks_like_grid_unit(detail):
+        return f"{label}. Участок: {detail}"
+    if _already_describes_outage(detail):
+        return f"{label}: {detail}"
+    return f"{label}. Детали источника: {detail}"
 
 
-def _is_active_impact(impact: OfficeImpact, now: datetime) -> bool:
+def _event_label(event: NormalizedEvent | None) -> str:
+    event_type = (event.event_type if event is not None else "").strip().lower()
+    if event_type == "infrastructure_failure":
+        return "Аварийное отключение электроэнергии"
+    if event_type in {"power_outage", "maintenance"}:
+        return "Плановое отключение электроэнергии"
+    if event is not None and _event_means_outage(event):
+        return "Отключение электроэнергии"
+    return "Возможное влияние на работу офиса"
+
+
+def _looks_like_grid_unit(value: str) -> bool:
+    text = value.casefold()
+    return any(term in text for term in _GRID_UNIT_TERMS)
+
+
+def _already_describes_outage(value: str) -> bool:
+    text = value.casefold()
+    return any(
+        term in text
+        for term in (
+            "отключ",
+            "электро",
+            "ремонт",
+            "авар",
+            "обесточ",
+            "вл-",
+            "тп-",
+            "outage",
+            "maintenance",
+            "shutdown",
+            "blackout",
+            "repair",
+        )
+    )
+
+
+def _is_relevant_impact(impact: OfficeImpact, now: datetime) -> bool:
     starts_at = _as_aware_utc(impact.impact_start)
     ends_at = _as_aware_utc(impact.impact_end) if impact.impact_end is not None else None
-    return starts_at <= now and (ends_at is None or ends_at >= now)
+    return starts_at <= now + _RISK_HORIZON and (ends_at is None or ends_at >= now)
 
 
 def _as_aware_utc(value: datetime) -> datetime:

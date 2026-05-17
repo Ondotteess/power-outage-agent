@@ -204,6 +204,7 @@ export interface LLMCostSummary {
 
 export interface NormalizerPathMix {
   automaton: number;
+  regex_fallback: number;
   llm_fallback: number;
   none: number;
   automaton_pct: number;

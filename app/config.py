@@ -6,9 +6,8 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/outage_agent"
 
-    # Generic OpenAI-compatible LLM settings — kept as a baseline for future provider
-    # switching (DeepSeek / OpenAI-compatible gateways). Not used by the active
-    # GigaChat normalizer (see fields below).
+    # Generic OpenAI-compatible LLM settings — retained for experiments only.
+    # The active normalization pipeline is fully deterministic.
     llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""
     llm_model: str = "deepseek-chat"
@@ -19,8 +18,8 @@ class Settings(BaseSettings):
     llm_normalization_max_per_raw: int = 5
     llm_normalization_rate_per_minute: int = 30
     # Confidence threshold for the deterministic Token-FSA normalizer. Below
-    # this score the FallbackNormalizer escalates to the LLM. 1.0 disables the
-    # automaton path entirely; 0.0 disables the LLM fallback.
+    # this score the FallbackNormalizer escalates to the local regex fallback.
+    # 1.0 routes every parse through regex; 0.0 keeps only the automaton path.
     normalizer_fallback_threshold: float = 0.6
 
     # GigaChat — currently the only active LLM provider in the normalizer.

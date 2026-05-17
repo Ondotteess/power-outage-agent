@@ -21,7 +21,7 @@ export function Metrics() {
     <div className="space-y-6">
       <PageHeader
         title="Metrics"
-        description="Stage timings, LLM cost and runtime — last 24 hours."
+        description="Stage timings, regex normalization paths and runtime — last 24 hours."
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -31,10 +31,9 @@ export function Metrics() {
         <KPI label="Failed" value={summary.data?.failed_tasks.value} tone="red" />
       </div>
 
-      {/* LLM cost panel — primary focus */}
       <Card>
         <CardHeader
-          title="LLM cost (GigaChat, 24h)"
+          title="Legacy LLM cost (GigaChat, 24h)"
           subtitle={
             m
               ? `Tariff: ${m.llm_cost.prompt_price_per_1k_rub} ₽/1k prompt · ${m.llm_cost.completion_price_per_1k_rub} ₽/1k completion`
@@ -60,11 +59,10 @@ export function Metrics() {
         </CardBody>
       </Card>
 
-      {/* Normalizer mix (automaton vs LLM fallback) */}
       <Card>
         <CardHeader
           title="Normalizer path mix"
-          subtitle="How often the FSA handled records on its own vs. fell back to GigaChat."
+          subtitle="How often the Token-FSA handled records on its own vs. local regex recovery."
         />
         <CardBody>
           {m ? <PathMix mix={m.normalizer_path} /> : <Empty>No data</Empty>}
@@ -169,22 +167,35 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="py-6 text-center text-sm text-ink-muted">{children}</div>;
 }
 
-function PathMix({ mix }: { mix: { automaton: number; llm_fallback: number; none: number; automaton_pct: number } }) {
-  const total = mix.automaton + mix.llm_fallback + mix.none;
+function PathMix({
+  mix,
+}: {
+  mix: {
+    automaton: number;
+    regex_fallback: number;
+    llm_fallback: number;
+    none: number;
+    automaton_pct: number;
+  };
+}) {
+  const total = mix.automaton + mix.regex_fallback + mix.llm_fallback + mix.none;
   if (total === 0) return <Empty>No NORMALIZE_EVENT tasks yet</Empty>;
   const autoPct = (mix.automaton / total) * 100;
+  const regexPct = (mix.regex_fallback / total) * 100;
   const llmPct = (mix.llm_fallback / total) * 100;
   const nonePct = (mix.none / total) * 100;
   return (
     <div className="space-y-3">
-      <div className="flex h-3 overflow-hidden rounded-full bg-surface-muted">
+      <div className="flex h-3 overflow-hidden rounded-full bg-bg-subtle">
         <div className="bg-accent-green" style={{ width: `${autoPct}%` }} title={`Automaton: ${mix.automaton}`} />
-        <div className="bg-accent-amber" style={{ width: `${llmPct}%` }} title={`LLM fallback: ${mix.llm_fallback}`} />
+        <div className="bg-accent-amber" style={{ width: `${regexPct}%` }} title={`Regex fallback: ${mix.regex_fallback}`} />
+        <div className="bg-ink-dim" style={{ width: `${llmPct}%` }} title={`Legacy LLM fallback: ${mix.llm_fallback}`} />
         <div className="bg-accent-red" style={{ width: `${nonePct}%` }} title={`None: ${mix.none}`} />
       </div>
-      <div className="grid grid-cols-3 gap-3 text-sm">
+      <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
         <Legend color="bg-accent-green" label="Automaton" count={mix.automaton} pct={autoPct} />
-        <Legend color="bg-accent-amber" label="LLM fallback" count={mix.llm_fallback} pct={llmPct} />
+        <Legend color="bg-accent-amber" label="Regex fallback" count={mix.regex_fallback} pct={regexPct} />
+        <Legend color="bg-ink-dim" label="Legacy LLM" count={mix.llm_fallback} pct={llmPct} />
         <Legend color="bg-accent-red" label="None" count={mix.none} pct={nonePct} />
       </div>
     </div>

@@ -24,6 +24,13 @@ class OfficeStoreProtocol(Protocol):
 class OfficeImpactStoreProtocol(Protocol):
     async def save_many(self, impacts: list[OfficeImpactSchema], trace_id: UUID) -> int: ...
 
+    async def replace_for_event(
+        self,
+        event_id: UUID,
+        impacts: list[OfficeImpactSchema],
+        trace_id: UUID,
+    ) -> int: ...
+
 
 class OfficeMatchHandler:
     """Handles MATCH_OFFICES tasks."""
@@ -91,7 +98,11 @@ class OfficeMatchHandler:
             for match in matches
         ]
 
-        saved = await self._impact_store.save_many(impacts, trace_id=task.trace_id)
+        saved = await self._impact_store.replace_for_event(
+            event.event_id,
+            impacts,
+            trace_id=task.trace_id,
+        )
         if self._submit is not None:
             for impact in impacts:
                 await self._submit(

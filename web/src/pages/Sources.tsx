@@ -35,6 +35,15 @@ export function Sources() {
     { key: "region", header: "Region", cell: (r) => r.region ?? "—" },
     { key: "interval", header: "Poll", cell: (r) => <span className="font-mono text-xs">{fmtInterval(r.poll_interval_seconds)}</span> },
     { key: "parser", header: "Parser", cell: (r) => <span className="font-mono text-xs text-ink-muted">{r.parser ?? "—"}</span> },
+    {
+      key: "profile",
+      header: "Profile",
+      cell: (r) => (
+        <span className="font-mono text-2xs text-ink-muted">
+          {truncate(JSON.stringify(r.parser_profile), 56)}
+        </span>
+      ),
+    },
     { key: "url", header: "URL", cell: (r) => <span className="font-mono text-xs text-ink-muted">{truncate(r.url, 40)}</span> },
     { key: "last", header: "Last fetch", cell: (r) => <span className="text-xs text-ink-muted" title={r.last_fetch ?? ""}>{fmtRelative(r.last_fetch)}</span> },
     { key: "win", header: "Records 24h", cell: (r) => <span className="font-mono">{fmtNumber(r.records_in_window)}</span> },

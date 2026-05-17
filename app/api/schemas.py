@@ -313,6 +313,7 @@ class LLMCostSummary(BaseModel):
 
 class NormalizerPathMix(BaseModel):
     automaton: int
+    regex_fallback: int
     llm_fallback: int
     none: int
     automaton_pct: float  # 0..1

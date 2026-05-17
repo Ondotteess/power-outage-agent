@@ -5,7 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from app.normalization.automaton import AutomatonNormalizer
+from app.normalization.automaton import AutomatonNormalizer, FallbackNormalizer, RegexNormalizer
 from app.quality.evaluation import evaluate_normalizer, load_quality_cases
 
 
@@ -23,9 +23,20 @@ async def main() -> int:
     args = _parse_args()
     cases_path = Path(args.cases)
     cases = load_quality_cases(cases_path)
-    report = await evaluate_normalizer(AutomatonNormalizer(), cases)
+    automaton = AutomatonNormalizer()
+    report = {
+        "automaton": await evaluate_normalizer(automaton, cases),
+        "automaton_plus_regex": await evaluate_normalizer(
+            FallbackNormalizer(
+                AutomatonNormalizer(),
+                RegexNormalizer(),
+                threshold=1.0,
+            ),
+            cases,
+        ),
+    }
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if not report["failures"] else 1
+    return 0 if not report["automaton_plus_regex"]["failures"] else 1
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from app.normalization.address import (
     HOUSE_RANGE_RE,
     HOUSE_RE,
     HOUSE_WORDS,
+    LOCALITY_WORDS,
     STREET_WORDS,
     is_house_token,
     normalize_building,
@@ -112,6 +113,7 @@ class OfficeMatcher:
         self._by_exact: dict[tuple[str, str, str], list[_OfficeProfile]] = {}
         self._by_street: dict[tuple[str, str], list[_OfficeProfile]] = {}
         self._by_street_only: dict[str, list[_OfficeProfile]] = {}
+        self._by_city: dict[str, list[_OfficeProfile]] = {}
         self._profiles: list[_OfficeProfile] = []
 
         for office in offices:
@@ -119,6 +121,7 @@ class OfficeMatcher:
             if profile is None:
                 continue
             self._profiles.append(profile)
+            self._by_city.setdefault(profile.city_key, []).append(profile)
             self._by_street.setdefault((profile.city_key, profile.street_key), []).append(profile)
             self._by_street_only.setdefault(profile.street_key, []).append(profile)
             if profile.building_key:
@@ -138,7 +141,7 @@ class OfficeMatcher:
         matched: dict[UUID, OfficeMatch] = {}
         impact_level = _impact_level(event, now)
 
-        for candidate in self._profiles:
+        for candidate in self._candidate_profiles(profile):
             match = _score_candidate(candidate, profile, impact_level)
             if match is None:
                 continue
@@ -154,6 +157,25 @@ class OfficeMatcher:
         offices = self._by_street_only.get(street_key, [])
         return offices if len({p.city_key for p in offices}) == 1 else []
 
+    def _candidate_profiles(self, event: _EventProfile) -> list[_OfficeProfile]:
+        exact_street_candidates: list[_OfficeProfile] = []
+        seen: set[UUID] = set()
+        for street_key in event.street_keys:
+            for candidate in self._candidates(event.city_key, street_key):
+                if candidate.office.id in seen:
+                    continue
+                seen.add(candidate.office.id)
+                exact_street_candidates.append(candidate)
+        if exact_street_candidates:
+            return exact_street_candidates
+
+        if event.city_key is not None:
+            city_candidates = self._by_city.get(event.city_key)
+            if city_candidates:
+                return city_candidates
+
+        return self._profiles
+
 
 def _score_candidate(
     candidate: _OfficeProfile,
@@ -161,7 +183,7 @@ def _score_candidate(
     impact_level: ImpactLevel,
 ) -> OfficeMatch | None:
     city_score = _city_score(event.city_key, candidate.city_key)
-    if city_score < 0.80:
+    if city_score < 0.88:
         return None
 
     best: OfficeMatch | None = None
@@ -202,18 +224,13 @@ def _score_candidate(
         elif has_house_data:
             continue
         else:
-            score = (
-                0.68
-                if exact_street and exact_city
-                else 0.55 + 0.08 * street_score + 0.05 * city_score
-            )
-            if score < 0.62:
+            if not (exact_street and exact_city):
                 continue
             match = OfficeMatch(
                 candidate.office,
                 impact_level,
-                "street_area" if exact_street else "fuzzy_street_area",
-                round(min(score, 0.74), 3),
+                "street_area",
+                0.68,
                 tuple([*explanation, "no house data in event; street-wide impact"]),
             )
 
@@ -225,7 +242,7 @@ def _score_candidate(
 
 def _office_profile(office: MatchableOffice) -> _OfficeProfile | None:
     city_key = normalize_city(office.city)
-    street, building = split_address(office.address)
+    street, building = _split_office_address(office.address)
     street_key = normalize_street(street)
     building_key = normalize_building(building)
     if not city_key or not street_key:
@@ -252,6 +269,8 @@ def _event_profile(event: MatchableEvent) -> _EventProfile:
     # `location_raw` and `location_street` instead.
     values = [event.location_street, event.location_raw]
     for segment in _segments(values):
+        if not _looks_like_street_segment(segment):
+            continue
         street_key = normalize_street(segment)
         if not street_key or street_key == city_key:
             continue
@@ -291,6 +310,47 @@ def _segments(values: list[str | None]) -> list[str]:
             if segment:
                 segments.append(segment)
     return segments
+
+
+def _split_office_address(address: str) -> tuple[str, str | None]:
+    """Extract the actual street from bank-style full addresses.
+
+    Imported Sber rows often look like
+    "Томская обл, с Молчаново, ул Димитрова, д 70А". Feeding the whole
+    prefix into street normalization makes "Томская область" look like part of
+    the street key and creates false fuzzy matches. Prefer the last street-like
+    segment and keep the trailing house as the building.
+    """
+
+    parts = [part.strip() for part in re.split(r"[,;]", address) if part.strip()]
+    building: str | None = None
+    street_parts = parts
+    if parts and normalize_building(parts[-1]):
+        building = parts[-1]
+        street_parts = parts[:-1]
+
+    for part in reversed(street_parts):
+        if not _looks_like_street_segment(part):
+            continue
+        street, recovered_building = split_address(part)
+        return street, building or recovered_building
+
+    street, recovered_building = split_address(address)
+    return street, building or recovered_building
+
+
+def _looks_like_street_segment(value: str) -> bool:
+    normalized = normalize_text(value)
+    tokens = normalized.split()
+    if not tokens:
+        return False
+    if any(token in STREET_WORDS for token in tokens):
+        return True
+    return bool(
+        len(tokens) >= 2
+        and any(is_house_token(token) for token in tokens)
+        and not any(token in LOCALITY_WORDS for token in tokens)
+    )
 
 
 def _has_house_data(value: str) -> bool:

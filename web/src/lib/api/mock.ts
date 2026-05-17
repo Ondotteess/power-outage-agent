@@ -421,7 +421,7 @@ export const mockClient: ApiClient = {
         { key: "scheduler", label: "Scheduler", status: "healthy", throughput: 0.5, queue_size: 0, latency_ms: null, retry_count: 0, metric_label: "tick", metric_value: "every 6h" },
         { key: "collector", label: "Collector", status: "healthy", throughput: 1.2, queue_size: 1, latency_ms: 320, retry_count: 0, metric_label: "fetched", metric_value: "40" },
         { key: "parser", label: "Parser", status: "running", throughput: 4.4, queue_size: 3, latency_ms: 90, retry_count: 0, metric_label: "parsed", metric_value: String(PARSED.length) },
-        { key: "normalizer", label: "LLM Normalizer", status: "running", throughput: 0.9, queue_size: 2, latency_ms: 1240, retry_count: 1, metric_label: "normalized", metric_value: String(NORMALIZED.length) },
+        { key: "normalizer", label: "Regex Normalizer", status: "running", throughput: 0.9, queue_size: 2, latency_ms: 1240, retry_count: 1, metric_label: "normalized", metric_value: String(NORMALIZED.length) },
         { key: "dedup", label: "Dedup Engine", status: "pending", throughput: null, queue_size: 0, latency_ms: null, retry_count: 0, metric_label: "skipped", metric_value: "17" },
         { key: "matcher", label: "Office Matcher", status: "pending", throughput: null, queue_size: 0, latency_ms: null, retry_count: 0, metric_label: "matched", metric_value: String(OFFICE_IMPACTS.length) },
         { key: "notifier", label: "Notifier", status: "pending", throughput: null, queue_size: 0, latency_ms: null, retry_count: 1, metric_label: "sent", metric_value: String(NOTIFICATIONS.filter((n) => n.status === "sent").length) },
@@ -529,7 +529,7 @@ export const mockClient: ApiClient = {
         prompt_price_per_1k_rub: 0.2,
         completion_price_per_1k_rub: 0.6,
       },
-      normalizer_path: { automaton: 50, llm_fallback: 14, none: 0, automaton_pct: 0.781 },
+      normalizer_path: { automaton: 50, regex_fallback: 14, llm_fallback: 0, none: 0, automaton_pct: 0.781 },
       recent_llm_calls: [
         {
           id: "llm-1",

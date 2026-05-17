@@ -50,7 +50,7 @@ REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 LOCALITY_WORDS: frozenset[str] = frozenset(
-    {"город", "г", "село", "с", "деревня", "д", "поселок", "пос", "пгт", "аул"}
+    {"город", "г", "село", "с", "деревня", "д", "поселок", "пос", "пгт", "рп", "аул", "аал"}
 )
 STREET_WORDS: frozenset[str] = frozenset(
     {
@@ -83,16 +83,32 @@ def normalize_text(value: str | None) -> str:
 
 
 def normalize_city(value: str | None) -> str | None:
-    tokens = [t for t in normalize_text(value).split() if t not in LOCALITY_WORDS]
+    tokens = [
+        t for t in normalize_text(value).split() if t not in LOCALITY_WORDS and t not in HOUSE_WORDS
+    ]
     return " ".join(tokens) or None
 
 
 def normalize_street(value: str | None) -> str:
+    raw_tokens = normalize_text(value).split()
     tokens = [
         t
-        for t in normalize_text(value).split()
+        for t in raw_tokens
         if t not in STREET_WORDS and t not in HOUSE_WORDS and t not in LOCALITY_WORDS
     ]
+    if not tokens:
+        # "ул Набережная" / "пл Площадь" contain a street-type word that is
+        # also the actual street name. If removing type words erased the whole
+        # street, keep the non-house tail instead of producing an empty key.
+        non_house = [
+            t
+            for t in raw_tokens
+            if t not in HOUSE_WORDS and t not in LOCALITY_WORDS and not is_house_token(t)
+        ]
+        if len(non_house) > 1 and non_house[0] in STREET_WORDS:
+            tokens = non_house[1:]
+        elif len(non_house) == 1:
+            tokens = non_house
     while len(tokens) > 1 and is_house_token(tokens[-1]):
         tokens.pop()
     return " ".join(tokens)

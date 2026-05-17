@@ -37,12 +37,14 @@ class NormalizationHandler:
         normalizer: NormalizerProtocol,
         submit: Callable[[Task], Awaitable[None]] | None = None,
         task_path_store: TaskPathStoreProtocol | None = None,
+        deterministic_normalizer: NormalizerProtocol | None = None,
     ) -> None:
         self._parsed_store = parsed_store
         self._normalized_store = normalized_store
         self._normalizer = normalizer
         self._submit = submit
         self._task_path_store = task_path_store
+        self._deterministic_normalizer = deterministic_normalizer
 
     async def handle(self, task: Task) -> None:
         parsed_id = UUID(task.payload["parsed_record_id"])
@@ -82,10 +84,17 @@ class NormalizationHandler:
                 )
             return
 
-        normalized = await self._normalizer.normalize(schema)
+        allow_fallback = bool(task.payload.get("allow_fallback", task.payload.get("allow_llm_fallback", True)))
+        normalizer = self._normalizer
+        if not allow_fallback and self._deterministic_normalizer is not None:
+            normalizer = self._deterministic_normalizer
+
+        normalized = await normalizer.normalize(schema)
         # Surface which normalizer path produced (or failed) — the Metrics
-        # page uses this to show automaton-vs-LLM hit ratio.
-        path = getattr(self._normalizer, "last_path", None)
+        # page uses this to show automaton-vs-regex hit ratio.
+        path = getattr(normalizer, "last_path", None)
+        if path is None and not allow_fallback:
+            path = "automaton" if normalized is not None else "none"
         if self._task_path_store is not None and path is not None:
             try:
                 await self._task_path_store.set_normalizer_path(task.task_id, path)

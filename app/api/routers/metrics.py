@@ -1,7 +1,7 @@
 """Pipeline performance & cost metrics.
 
 Aggregates per-stage timings (from TaskRecord.duration_ms), GigaChat call
-volumes / token spend (from LLMCall), and the FSA-vs-LLM mix recorded by
+volumes / token spend (from LLMCall), and the FSA-vs-regex mix recorded by
 NormalizationHandler.
 
 The cost number is an SDK-side estimate: tokens times the tariff configured
@@ -86,9 +86,10 @@ async def pipeline_metrics(
     )
 
     automaton = path_counts.get("automaton", 0)
+    regex_path = path_counts.get("regex_fallback", 0)
     llm_path = path_counts.get("llm_fallback", 0)
     none_path = path_counts.get("none", 0)
-    total_paths = automaton + llm_path + none_path
+    total_paths = automaton + regex_path + llm_path + none_path
     automaton_pct = automaton / total_paths if total_paths else 0.0
 
     return PipelineMetrics(
@@ -109,6 +110,7 @@ async def pipeline_metrics(
         ),
         normalizer_path=NormalizerPathMix(
             automaton=automaton,
+            regex_fallback=regex_path,
             llm_fallback=llm_path,
             none=none_path,
             automaton_pct=round(automaton_pct, 3),
