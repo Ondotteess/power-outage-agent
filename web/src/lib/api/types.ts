@@ -265,6 +265,13 @@ export interface MapOfficeImpact {
   match_strategy: string | null;
   match_score: number | null;
   match_explanation: string[];
+  source_name: string | null;
+  source_url: string | null;
+  source_record_url: string | null;
+  source_record_id: string | null;
+  raw_record_id: string | null;
+  parsed_record_id: string | null;
+  fetched_at: string | null;
 }
 
 export interface MapOffice {

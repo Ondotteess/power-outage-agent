@@ -159,4 +159,8 @@
   .office-map-popup ul {
     @apply mt-1 list-disc space-y-1 pl-4 text-ink-muted;
   }
+
+  .office-map-popup-source {
+    @apply mt-2 block rounded-md border border-line/60 bg-bg-subtle px-2 py-1.5 text-2xs text-ink hover:border-ink/30 hover:bg-bg-elevated;
+  }
 }

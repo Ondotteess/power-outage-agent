@@ -139,6 +139,13 @@ class MapOfficeImpactOut(BaseModel):
     match_strategy: str | None = None
     match_score: float | None = None
     match_explanation: list[str] = Field(default_factory=list)
+    source_name: str | None = None
+    source_url: str | None = None
+    source_record_url: str | None = None
+    source_record_id: str | None = None
+    raw_record_id: UUID | None = None
+    parsed_record_id: UUID | None = None
+    fetched_at: datetime | None = None
 
 
 class MapOfficeOut(BaseModel):

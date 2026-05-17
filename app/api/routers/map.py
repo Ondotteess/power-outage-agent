@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
+from urllib.parse import quote, urldefrag, urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -9,7 +11,7 @@ from fastapi import APIRouter
 from app.api import queries
 from app.api.deps import SessionDep
 from app.api.schemas import MapOfficeImpactOut, MapOfficeOut, MapOfficesResponse
-from app.db.models import NormalizedEvent, Office, OfficeImpact
+from app.db.models import NormalizedEvent, Office, OfficeImpact, ParsedRecord, RawRecord, Source
 
 router = APIRouter(prefix="/api/map", tags=["map"])
 
@@ -35,6 +37,17 @@ class _OfficeBucket:
     impacts: list[tuple[MapOfficeImpactOut, str]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _AuditTrail:
+    source_name: str | None = None
+    source_url: str | None = None
+    source_record_url: str | None = None
+    source_record_id: str | None = None
+    raw_record_id: UUID | None = None
+    parsed_record_id: UUID | None = None
+    fetched_at: datetime | None = None
+
+
 @router.get("/offices", response_model=MapOfficesResponse)
 async def list_map_offices(session: SessionDep) -> MapOfficesResponse:
     now = datetime.now(UTC)
@@ -43,13 +56,14 @@ async def list_map_offices(session: SessionDep) -> MapOfficesResponse:
 
 
 def build_map_offices_response(
-    rows: list[tuple[Office, OfficeImpact | None, NormalizedEvent | None]],
+    rows: list[tuple[Any, ...]],
     *,
     now: datetime | None = None,
 ) -> MapOfficesResponse:
     active_at = _as_aware_utc(now or datetime.now(UTC))
     buckets: dict[UUID, _OfficeBucket] = {}
-    for office, impact, event in rows:
+    for row in rows:
+        office, impact, event, audit = _unpack_map_row(row)
         bucket = buckets.setdefault(office.id, _OfficeBucket(office=office))
         if impact is None or not _is_relevant_impact(impact, active_at):
             continue
@@ -68,6 +82,13 @@ def build_map_offices_response(
                     match_strategy=impact.match_strategy,
                     match_score=getattr(impact, "match_score", None),
                     match_explanation=getattr(impact, "match_explanation", None) or [],
+                    source_name=audit.source_name,
+                    source_url=audit.source_url,
+                    source_record_url=audit.source_record_url,
+                    source_record_id=audit.source_record_id,
+                    raw_record_id=audit.raw_record_id,
+                    parsed_record_id=audit.parsed_record_id,
+                    fetched_at=audit.fetched_at,
                 ),
                 status,
             )
@@ -75,6 +96,53 @@ def build_map_offices_response(
 
     offices = [_map_office(bucket) for bucket in buckets.values()]
     return MapOfficesResponse(offices=offices)
+
+
+def _unpack_map_row(
+    row: tuple[Any, ...],
+) -> tuple[Office, OfficeImpact | None, NormalizedEvent | None, _AuditTrail]:
+    if len(row) == 3:
+        office, impact, event = row
+        return office, impact, event, _AuditTrail()
+    if len(row) == 6:
+        office, impact, event, parsed, raw, source = row
+        return office, impact, event, _build_audit_trail(parsed, raw, source)
+    raise ValueError(f"Unexpected map row shape: {len(row)}")
+
+
+def _build_audit_trail(
+    parsed: ParsedRecord | None,
+    raw: RawRecord | None,
+    source: Source | None,
+) -> _AuditTrail:
+    source_url = (raw.source_url if raw is not None else None) or (
+        source.url if source is not None else None
+    )
+    source_name = source.name if source is not None else None
+    record_id = parsed.external_id if parsed is not None else None
+    record_url = _source_record_url(source_url, parsed)
+    return _AuditTrail(
+        source_name=source_name,
+        source_url=source_url,
+        source_record_url=record_url,
+        source_record_id=record_id,
+        raw_record_id=raw.id if raw is not None else None,
+        parsed_record_id=parsed.id if parsed is not None else None,
+        fetched_at=raw.fetched_at if raw is not None else None,
+    )
+
+
+def _source_record_url(source_url: str | None, parsed: ParsedRecord | None) -> str | None:
+    if not source_url:
+        return None
+
+    external_id = (parsed.external_id or "").strip() if parsed is not None else ""
+    host = urlsplit(source_url).netloc.casefold()
+    if external_id and "rosseti-tomsk.ru" in host:
+        base, _fragment = urldefrag(source_url)
+        return f"{base}#{quote(external_id, safe='')}"
+
+    return source_url
 
 
 def _map_office(bucket: _OfficeBucket) -> MapOfficeOut:

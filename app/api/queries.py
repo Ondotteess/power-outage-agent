@@ -221,9 +221,18 @@ async def list_map_office_rows(
     *,
     now: datetime,
     horizon_until: datetime,
-) -> list[tuple[Office, OfficeImpact | None, NormalizedEvent | None]]:
+) -> list[
+    tuple[
+        Office,
+        OfficeImpact | None,
+        NormalizedEvent | None,
+        ParsedRecord | None,
+        RawRecord | None,
+        Source | None,
+    ]
+]:
     result = await session.execute(
-        select(Office, OfficeImpact, NormalizedEvent)
+        select(Office, OfficeImpact, NormalizedEvent, ParsedRecord, RawRecord, Source)
         .outerjoin(
             OfficeImpact,
             and_(
@@ -233,9 +242,15 @@ async def list_map_office_rows(
             ),
         )
         .outerjoin(NormalizedEvent, NormalizedEvent.event_id == OfficeImpact.event_id)
+        .outerjoin(ParsedRecord, ParsedRecord.id == NormalizedEvent.parsed_record_id)
+        .outerjoin(RawRecord, RawRecord.id == ParsedRecord.raw_record_id)
+        .outerjoin(Source, Source.id == RawRecord.source_id)
         .order_by(Office.name, desc(OfficeImpact.impact_start))
     )
-    return [(office, impact, event) for office, impact, event in result.all()]
+    return [
+        (office, impact, event, parsed, raw, source)
+        for office, impact, event, parsed, raw, source in result.all()
+    ]
 
 
 async def list_notifications(

@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { AlertTriangle, Loader2, MapPinned, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, ExternalLink, Loader2, MapPinned, RefreshCw, Search } from "lucide-react";
 import { api } from "@/lib/api";
-import type { MapImpactSeverity, MapOffice, MapOfficeStatus } from "@/lib/api/types";
+import type { MapImpactSeverity, MapOffice, MapOfficeImpact, MapOfficeStatus } from "@/lib/api/types";
 import { Badge, StatusDot } from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -66,6 +66,25 @@ function severityLabel(severity: MapImpactSeverity): string {
   return SEVERITY_LABEL[severity] ?? severity;
 }
 
+function sourceHref(impact: MapOfficeImpact): string | null {
+  return impact.source_record_url ?? impact.source_url ?? null;
+}
+
+function sourceLabel(impact: MapOfficeImpact): string {
+  return impact.source_name ?? "Источник отключения";
+}
+
+function popupSourceHtml(impact: MapOfficeImpact): string {
+  const href = sourceHref(impact);
+  if (!href) return "";
+  const record = impact.source_record_id ? ` · запись ${escapeHtml(impact.source_record_id)}` : "";
+  return `
+    <a class="office-map-popup-source" href="${escapeHtml(href)}" target="_blank" rel="noreferrer">
+      ${escapeHtml(sourceLabel(impact))}${record}
+    </a>
+  `;
+}
+
 function popupHtml(office: MapOffice): string {
   const primary = office.active_impacts[0];
   const other = office.active_impacts.slice(1);
@@ -79,6 +98,7 @@ function popupHtml(office: MapOffice): string {
           <dt>Начало</dt><dd>${escapeHtml(fmtDate(primary.starts_at))}</dd>
           <dt>Окончание</dt><dd>${escapeHtml(primary.ends_at ? fmtDate(primary.ends_at) : "не указано")}</dd>
         </dl>
+        ${popupSourceHtml(primary)}
       </div>
       ${
         other.length
@@ -342,6 +362,24 @@ function SelectedOffice({ office }: { office: MapOffice | undefined }) {
               <span className="font-mono text-ink">{primary.ends_at ? fmtDate(primary.ends_at) : "не указано"}</span>
             </div>
           </div>
+          {sourceHref(primary) && (
+            <a
+              href={sourceHref(primary) ?? undefined}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-start gap-2 rounded-md border border-line/60 bg-bg-subtle px-2 py-2 text-xs text-ink transition-colors hover:border-ink/30 hover:bg-bg-elevated"
+            >
+              <ExternalLink size={14} className="mt-0.5 shrink-0 text-ink-muted" />
+              <span className="min-w-0">
+                <span className="block truncate">{sourceLabel(primary)}</span>
+                {primary.source_record_id && (
+                  <span className="mt-0.5 block truncate font-mono text-2xs text-ink-muted">
+                    запись {primary.source_record_id}
+                  </span>
+                )}
+              </span>
+            </a>
+          )}
           {office.active_impacts.length > 1 && (
             <div className="space-y-1 pt-2">
               <div className="text-xs text-ink-muted">Другие угрозы</div>
